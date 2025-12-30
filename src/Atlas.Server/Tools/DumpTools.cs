@@ -1,44 +1,13 @@
+using Microsoft.Diagnostics.Runtime;
 using ModelContextProtocol.Server;
 using System.ComponentModel;
-using System.Runtime.InteropServices;
 using System.Text;
-using System.Text.Json;
 
 namespace Atlas.Server.Tools;
 
 [McpServerToolType]
 public static class DumpTools
 {
-    // P/Invoke declarations for Rust atlas-dump-core library
-    private const string DumpCoreDll = "atlas-dump-core.dll";
-
-    [DllImport(DumpCoreDll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr analyze_dump(
-        [MarshalAs(UnmanagedType.LPUTF8Str)] string filePath);
-
-    [DllImport(DumpCoreDll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern void free_result(IntPtr result);
-
-    private static bool _rustLibraryAvailable = false;
-    private static bool _rustLibraryChecked = false;
-
-    private static bool IsRustLibraryAvailable()
-    {
-        if (!_rustLibraryChecked)
-        {
-            _rustLibraryChecked = true;
-            // Check if the DLL exists in common locations
-            var searchPaths = new[]
-            {
-                Path.Combine(AppContext.BaseDirectory, DumpCoreDll),
-                Path.Combine(AppContext.BaseDirectory, "native", DumpCoreDll),
-                DumpCoreDll
-            };
-            _rustLibraryAvailable = searchPaths.Any(File.Exists);
-        }
-        return _rustLibraryAvailable;
-    }
-
     [McpServerTool(Name = "analyze_dump")]
     [Description("Analyze a Windows memory dump file (.dmp) - detects dump type and extracts key information")]
     public static object AnalyzeDump(
@@ -50,47 +19,190 @@ public static class DumpTools
         }
 
         var fileInfo = new FileInfo(filePath);
-        
-        // Try Rust library first
-        if (IsRustLibraryAvailable())
+        var dumpType = DetectDumpType(filePath);
+
+        // For minidumps, try ClrMD analysis (works for .NET process dumps)
+        if (dumpType.type == "minidump")
         {
+            return AnalyzeWithClrMD(filePath, fileInfo, dumpType);
+        }
+
+        // For kernel/full dumps, provide basic info (ClrMD doesn't support these)
+        return new
+        {
+            filePath,
+            fileName = fileInfo.Name,
+            sizeMB = fileInfo.Length / 1024.0 / 1024.0,
+            sizeBytes = fileInfo.Length,
+            created = fileInfo.CreationTime.ToString("o"),
+            modified = fileInfo.LastWriteTime.ToString("o"),
+            dumpType = dumpType.type,
+            dumpTypeDescription = dumpType.description,
+            status = "kernel_dump_detected",
+            note = "Kernel/full memory dumps require WinDbg for detailed analysis. ClrMD only supports user-mode minidumps."
+        };
+    }
+
+    private static object AnalyzeWithClrMD(string filePath, FileInfo fileInfo, (string type, string description) dumpType)
+    {
+        try
+        {
+            using var dataTarget = DataTarget.LoadDump(filePath);
+            
+            var clrVersions = dataTarget.ClrVersions.ToList();
+            
+            if (clrVersions.Count == 0)
+            {
+                // Native dump (no CLR) - still provide what we can
+                return new
+                {
+                    filePath,
+                    fileName = fileInfo.Name,
+                    sizeMB = Math.Round(fileInfo.Length / 1024.0 / 1024.0, 2),
+                    sizeBytes = fileInfo.Length,
+                    created = fileInfo.CreationTime.ToString("o"),
+                    modified = fileInfo.LastWriteTime.ToString("o"),
+                    dumpType = dumpType.type,
+                    dumpTypeDescription = dumpType.description,
+                    architecture = dataTarget.DataReader.Architecture.ToString(),
+                    moduleCount = dataTarget.DataReader.EnumerateModules().Count(),
+                    modules = dataTarget.DataReader.EnumerateModules()
+                        .Take(50)
+                        .Select(m => new
+                        {
+                            name = Path.GetFileName(m.FileName ?? "unknown"),
+                            baseAddress = $"0x{m.ImageBase:X}",
+                            size = m.IndexFileSize
+                        })
+                        .ToList(),
+                    status = "native_minidump",
+                    note = "Native dump (no .NET CLR detected). Module list provided. For full stack analysis use WinDbg."
+                };
+            }
+
+            // .NET process dump - full ClrMD analysis
+            var clrInfo = clrVersions[0];
+            
+            ClrRuntime? runtime = null;
+            List<object>? threads = null;
+            List<object>? exceptions = null;
+            object? heapInfo = null;
+            string? runtimeError = null;
+
             try
             {
-                var resultPtr = analyze_dump(filePath);
-                if (resultPtr != IntPtr.Zero)
+                runtime = clrInfo.CreateRuntime();
+                
+                threads = runtime.Threads
+                    .Where(t => t.IsAlive)
+                    .Take(50)
+                    .Select(t => (object)new
+                    {
+                        osThreadId = $"0x{t.OSThreadId:X}",
+                        managedThreadId = t.ManagedThreadId,
+                        isGC = t.IsGc,
+                        isFinalizer = t.IsFinalizer,
+                        stackFrameCount = t.EnumerateStackTrace().Count(),
+                        stackTrace = t.EnumerateStackTrace()
+                            .Take(10)
+                            .Select(f => f.ToString())
+                            .ToList(),
+                        currentException = t.CurrentException?.Type?.Name
+                    })
+                    .ToList();
+
+                exceptions = runtime.Threads
+                    .Where(t => t.CurrentException != null)
+                    .Select(t => (object)new
+                    {
+                        threadId = $"0x{t.OSThreadId:X}",
+                        exceptionType = t.CurrentException!.Type?.Name,
+                        message = t.CurrentException.Message,
+                        hresult = t.CurrentException.HResult
+                    })
+                    .ToList();
+
+                if (runtime.Heap.CanWalkHeap)
                 {
-                    try
+                    var segments = runtime.Heap.Segments.ToList();
+                    heapInfo = new
                     {
-                        var json = Marshal.PtrToStringUTF8(resultPtr);
-                        free_result(resultPtr);
-                        
-                        if (!string.IsNullOrEmpty(json))
-                        {
-                            return JsonSerializer.Deserialize<object>(json) 
-                                ?? new { error = "Failed to parse Rust response" };
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        return new { error = $"Failed to process Rust response: {ex.Message}" };
-                    }
+                        canWalkHeap = true,
+                        segmentCount = segments.Count,
+                        totalHeapSize = segments.Sum(s => (long)s.Length),
+                        ephemeralSegments = segments.Count(s => s.Kind == GCSegmentKind.Ephemeral),
+                        gen2Segments = segments.Count(s => s.Kind == GCSegmentKind.Generation2),
+                        largeObjectSegments = segments.Count(s => s.Kind == GCSegmentKind.Large),
+                        pinnedObjectSegments = segments.Count(s => s.Kind == GCSegmentKind.Pinned)
+                    };
                 }
-            }
-            catch (DllNotFoundException)
-            {
-                _rustLibraryAvailable = false;
+                else
+                {
+                    heapInfo = new { canWalkHeap = false, note = "Heap was in an inconsistent state during dump" };
+                }
             }
             catch (Exception ex)
             {
-                return new { error = $"Rust library error: {ex.Message}" };
+                runtimeError = $"Could not create CLR runtime: {ex.Message}";
             }
-        }
+            finally
+            {
+                runtime?.Dispose();
+            }
 
-        // Fallback: Basic C# analysis (header detection only)
-        return AnalyzeDumpBasic(filePath, fileInfo);
+            var modules = dataTarget.DataReader.EnumerateModules()
+                .Take(100)
+                .Select(m => new
+                {
+                    name = Path.GetFileName(m.FileName ?? "unknown"),
+                    baseAddress = $"0x{m.ImageBase:X}",
+                    size = m.IndexFileSize
+                })
+                .ToList();
+
+            return new
+            {
+                filePath,
+                fileName = fileInfo.Name,
+                sizeMB = Math.Round(fileInfo.Length / 1024.0 / 1024.0, 2),
+                sizeBytes = fileInfo.Length,
+                created = fileInfo.CreationTime.ToString("o"),
+                modified = fileInfo.LastWriteTime.ToString("o"),
+                dumpType = dumpType.type,
+                dumpTypeDescription = dumpType.description,
+                architecture = dataTarget.DataReader.Architecture.ToString(),
+                clrVersions = clrVersions.Select(v => new
+                {
+                    version = v.Version.ToString(),
+                    flavor = v.Flavor.ToString()
+                }).ToList(),
+                threadCount = threads?.Count ?? 0,
+                threads,
+                exceptionCount = exceptions?.Count ?? 0,
+                exceptions,
+                heap = heapInfo,
+                moduleCount = modules.Count,
+                modules,
+                runtimeError,
+                status = "clrmd_analysis_complete",
+                analyzedWith = "Microsoft.Diagnostics.Runtime (ClrMD)"
+            };
+        }
+        catch (Exception ex)
+        {
+            return new
+            {
+                filePath,
+                fileName = fileInfo.Name,
+                sizeMB = Math.Round(fileInfo.Length / 1024.0 / 1024.0, 2),
+                dumpType = dumpType.type,
+                error = $"ClrMD analysis failed: {ex.Message}",
+                suggestion = "This dump may be corrupted, from an unsupported architecture, or require the matching DAC file."
+            };
+        }
     }
 
-    private static object AnalyzeDumpBasic(string filePath, FileInfo fileInfo)
+    private static (string type, string description) DetectDumpType(string filePath)
     {
         try
         {
@@ -100,59 +212,35 @@ public static class DumpTools
 
             if (bytesRead < 4)
             {
-                return new { error = "File too small to be a valid dump" };
+                return ("unknown", "File too small to be a valid dump");
             }
 
             var signature = Encoding.ASCII.GetString(header, 0, 4);
-            var dumpType = DetectDumpType(header, signature);
 
-            return new
+            // MDMP = Minidump
+            if (signature == "MDMP")
             {
-                filePath,
-                fileName = fileInfo.Name,
-                sizeMB = fileInfo.Length / 1024 / 1024,
-                sizeBytes = fileInfo.Length,
-                created = fileInfo.CreationTime.ToString("o"),
-                modified = fileInfo.LastWriteTime.ToString("o"),
-                dumpType = dumpType.type,
-                dumpTypeDescription = dumpType.description,
-                signature = BitConverter.ToString(header[..4]),
-                status = "basic_analysis",
-                note = "Full analysis requires Rust atlas-dump-core library. Run 'cargo build --release' in rust/atlas-dump-core/"
-            };
+                return ("minidump", "Windows Minidump - user mode crash dump");
+            }
+
+            // PAGE = Full memory dump
+            if (signature == "PAGE")
+            {
+                return ("full_dump", "Windows Full Memory Dump - complete system memory");
+            }
+
+            // DUMP = Kernel dump
+            if (signature == "DUMP")
+            {
+                return ("kernel_dump", "Windows Kernel Dump - kernel memory only");
+            }
+
+            return ("unknown", $"Unknown dump format (signature: {signature})");
         }
         catch (Exception ex)
         {
-            return new { error = $"Failed to read dump file: {ex.Message}" };
+            return ("error", $"Could not read dump header: {ex.Message}");
         }
-    }
-
-    private static (string type, string description) DetectDumpType(byte[] header, string signature)
-    {
-        // Check for MDMP (Minidump) - "MDMP" signature
-        if (signature == "MDMP")
-        {
-            return ("minidump", "Windows Minidump - contains limited crash information");
-        }
-
-        // Check for full/kernel dump - "PAGE" or "DUMP" signature
-        if (signature == "PAGE")
-        {
-            return ("full_dump", "Windows Full Memory Dump - complete system memory");
-        }
-
-        if (signature == "DUMP")
-        {
-            return ("kernel_dump", "Windows Kernel Dump - kernel memory only");
-        }
-
-        // Check for DMP header with different versions
-        if (header[0] == 0x4D && header[1] == 0x44) // "MD"
-        {
-            return ("minidump_variant", "Minidump variant");
-        }
-
-        return ("unknown", $"Unknown dump format (signature: {signature})");
     }
 
     [McpServerTool(Name = "list_dumps")]
@@ -194,7 +282,7 @@ public static class DumpTools
                     {
                         path = searchPath,
                         name = fi.Name,
-                        sizeMB = fi.Length / 1024 / 1024,
+                        sizeMB = Math.Round(fi.Length / 1024.0 / 1024.0, 2),
                         modified = fi.LastWriteTime.ToString("o")
                     });
                 }
@@ -207,7 +295,7 @@ public static class DumpTools
                         {
                             path = file,
                             name = fi.Name,
-                            sizeMB = fi.Length / 1024 / 1024,
+                            sizeMB = Math.Round(fi.Length / 1024.0 / 1024.0, 2),
                             modified = fi.LastWriteTime.ToString("o")
                         });
                     }
@@ -219,7 +307,7 @@ public static class DumpTools
         return new
         {
             count = dumps.Count,
-            searchedPaths = searchPaths.Where(Directory.Exists).ToList(),
+            searchedPaths = searchPaths.Where(p => Directory.Exists(p) || File.Exists(p)).ToList(),
             dumps = dumps.OrderByDescending(d => ((dynamic)d).modified).Take(20).ToList()
         };
     }
