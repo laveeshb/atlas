@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "atlas": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Atlas.Server"]
+    }
+  }
+}
