@@ -8,16 +8,45 @@ mod parser;
 pub struct DumpAnalysisResult {
     pub success: bool,
     pub dump_type: Option<String>,
+    pub dump_type_description: Option<String>,
     pub error: Option<String>,
-    pub bugcheck: Option<BugcheckInfo>,
-    pub process_count: Option<u32>,
+    pub file_size_mb: Option<u64>,
+    pub timestamp: Option<String>,
+    pub exception: Option<ExceptionInfo>,
+    pub system: Option<SystemInfo>,
+    pub threads: Option<Vec<ThreadInfo>>,
+    pub modules: Option<Vec<ModuleInfo>>,
+    pub memory_regions: Option<u32>,
 }
 
 #[derive(Serialize)]
-pub struct BugcheckInfo {
-    pub code: u32,
-    pub code_name: String,
-    pub parameters: [u64; 4],
+pub struct ExceptionInfo {
+    pub code: String,
+    pub code_hex: String,
+    pub description: String,
+    pub address: Option<String>,
+    pub thread_id: Option<u32>,
+}
+
+#[derive(Serialize)]
+pub struct SystemInfo {
+    pub os_version: Option<String>,
+    pub cpu_arch: Option<String>,
+    pub cpu_count: Option<u32>,
+}
+
+#[derive(Serialize)]
+pub struct ThreadInfo {
+    pub id: u32,
+    pub crashed: bool,
+}
+
+#[derive(Serialize)]
+pub struct ModuleInfo {
+    pub name: String,
+    pub base_address: String,
+    pub size: u64,
+    pub version: Option<String>,
 }
 
 /// Analyze a dump file and return JSON result
@@ -56,9 +85,15 @@ fn error_result(msg: &str) -> *mut c_char {
     let result = DumpAnalysisResult {
         success: false,
         dump_type: None,
+        dump_type_description: None,
         error: Some(msg.to_string()),
-        bugcheck: None,
-        process_count: None,
+        file_size_mb: None,
+        timestamp: None,
+        exception: None,
+        system: None,
+        threads: None,
+        modules: None,
+        memory_regions: None,
     };
     let json = serde_json::to_string(&result).unwrap();
     CString::new(json).unwrap().into_raw()
