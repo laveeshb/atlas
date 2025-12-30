@@ -1,6 +1,5 @@
 use crate::{DumpAnalysisResult, ExceptionInfo, ModuleInfo, SystemInfo, ThreadInfo};
 use minidump::{Minidump, MinidumpModuleList, MinidumpThreadList};
-use minidump_common::format::MINIDUMP_STREAM_TYPE;
 use std::fs;
 use std::path::Path;
 
@@ -125,7 +124,7 @@ fn analyze_minidump(path: &Path, file_size_mb: Option<u64>) -> DumpAnalysisResul
                     name: name.to_string(),
                     base_address: format!("0x{:016X}", m.raw.base_of_image),
                     size: m.raw.size_of_image as u64,
-                    version: m.version.as_ref().map(|v| v.to_string()),
+                    version: None, // Version info not directly available in this API version
                 }
             })
             .collect()
@@ -143,7 +142,7 @@ fn analyze_minidump(path: &Path, file_size_mb: Option<u64>) -> DumpAnalysisResul
         .ok()
         .and_then(|misc| {
             misc.raw.process_create_time().map(|t| {
-                chrono::DateTime::from_timestamp(t as i64, 0)
+                chrono::DateTime::from_timestamp(*t as i64, 0)
                     .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
                     .unwrap_or_else(|| format!("timestamp: {}", t))
             })

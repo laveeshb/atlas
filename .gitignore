@@ -26,5 +26,11 @@ Thumbs.db
 # Logs
 *.log
 
+# Memory dumps and test files
+*.dmp
+procdump*.exe
+procdump.zip
+Eula.txt
+
 # Local dev
 .env
