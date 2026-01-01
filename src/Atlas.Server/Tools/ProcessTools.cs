@@ -13,153 +13,177 @@ public static class ProcessTools
     [Description("List all running processes with basic information including parent PID and command line")]
     public static object ListProcesses(
         [Description("Optional: filter by process name (partial match)")] string? nameFilter = null,
-        [Description("Max results to return (default 50)")] int limit = 50)
+        [Description("Max results to return (default 50)")] int limit = 50,
+        [Description("Optional: remote machine name (e.g., 'SERVER01' or '192.168.1.100')")] string? hostname = null)
     {
-        var wmiProcesses = new Dictionary<int, (int parentPid, string commandLine)>();
-        
-        // Use WMI to get parent PID and command line (not available via System.Diagnostics)
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            try
-            {
-                using var searcher = new ManagementObjectSearcher("SELECT ProcessId, ParentProcessId, CommandLine FROM Win32_Process");
-                foreach (ManagementObject obj in searcher.Get())
-                {
-                    var pid = Convert.ToInt32(obj["ProcessId"]);
-                    var ppid = Convert.ToInt32(obj["ParentProcessId"] ?? 0);
-                    var cmdLine = obj["CommandLine"]?.ToString() ?? "";
-                    wmiProcesses[pid] = (ppid, cmdLine);
-                }
-            }
-            catch { /* WMI may fail for some processes */ }
+            return new { error = "This tool is only supported on Windows" };
         }
 
-        var processes = Process.GetProcesses()
-            .Where(p => string.IsNullOrEmpty(nameFilter) || 
-                        p.ProcessName.Contains(nameFilter, StringComparison.OrdinalIgnoreCase))
-            .Select(p =>
-            {
-                wmiProcesses.TryGetValue(p.Id, out var wmiInfo);
-                return new
-                {
-                    pid = p.Id,
-                    parentPid = wmiInfo.parentPid,
-                    name = p.ProcessName,
-                    commandLine = TruncateString(wmiInfo.commandLine, 200),
-                    memoryMB = p.WorkingSet64 / 1024 / 1024,
-                    threads = p.Threads.Count
-                };
-            })
-            .OrderByDescending(p => p.memoryMB)
-            .Take(limit)
-            .ToList();
+        try
+        {
+            var scope = GetManagementScope(hostname);
+            var processes = new List<object>();
 
-        return new { count = processes.Count, processes };
+            using var searcher = new ManagementObjectSearcher(scope,
+                new ObjectQuery("SELECT ProcessId, ParentProcessId, Name, CommandLine, WorkingSetSize, ThreadCount FROM Win32_Process"));
+
+            foreach (ManagementObject obj in searcher.Get())
+            {
+                var name = obj["Name"]?.ToString() ?? "";
+                if (!string.IsNullOrEmpty(nameFilter) &&
+                    !name.Contains(nameFilter, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                processes.Add(new
+                {
+                    pid = Convert.ToInt32(obj["ProcessId"]),
+                    parentPid = Convert.ToInt32(obj["ParentProcessId"] ?? 0),
+                    name,
+                    commandLine = TruncateString(obj["CommandLine"]?.ToString(), 200),
+                    memoryMB = Convert.ToInt64(obj["WorkingSetSize"] ?? 0) / 1024 / 1024,
+                    threads = Convert.ToInt32(obj["ThreadCount"] ?? 0)
+                });
+            }
+
+            var result = processes
+                .OrderByDescending(p => ((dynamic)p).memoryMB)
+                .Take(limit)
+                .ToList();
+
+            return new
+            {
+                count = result.Count,
+                hostname = hostname ?? Environment.MachineName,
+                isRemote = !string.IsNullOrEmpty(hostname),
+                processes = result
+            };
+        }
+        catch (Exception ex)
+        {
+            return new { error = $"Failed to list processes: {ex.Message}", hostname };
+        }
     }
 
     [McpServerTool(Name = "get_process_details")]
     [Description("Get detailed information about a specific process including modules, threads, and environment")]
     public static object GetProcessDetails(
         [Description("Process ID to inspect")] int pid,
-        [Description("Include loaded modules list")] bool includeModules = false)
+        [Description("Include loaded modules list")] bool includeModules = false,
+        [Description("Optional: remote machine name (e.g., 'SERVER01' or '192.168.1.100')")] string? hostname = null)
     {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return new { error = "This tool is only supported on Windows" };
+        }
+
         try
         {
-            var p = Process.GetProcessById(pid);
-            
-            // Get WMI info for command line and parent
-            int parentPid = 0;
-            string commandLine = "";
-            string executablePath = "";
-            
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            var scope = GetManagementScope(hostname);
+            var isRemote = !string.IsNullOrEmpty(hostname);
+
+            using var searcher = new ManagementObjectSearcher(scope,
+                new ObjectQuery($"SELECT * FROM Win32_Process WHERE ProcessId = {pid}"));
+
+            ManagementObject? processObj = null;
+            foreach (ManagementObject obj in searcher.Get())
+            {
+                processObj = obj;
+                break;
+            }
+
+            if (processObj == null)
+                return new { error = $"Process with PID {pid} not found", hostname };
+
+            var result = new Dictionary<string, object>
+            {
+                ["pid"] = pid,
+                ["parentPid"] = Convert.ToInt32(processObj["ParentProcessId"] ?? 0),
+                ["name"] = processObj["Name"]?.ToString() ?? "",
+                ["commandLine"] = processObj["CommandLine"]?.ToString() ?? "",
+                ["executablePath"] = processObj["ExecutablePath"]?.ToString() ?? "",
+                ["memoryMB"] = Convert.ToInt64(processObj["WorkingSetSize"] ?? 0) / 1024 / 1024,
+                ["virtualMemoryMB"] = Convert.ToInt64(processObj["VirtualSize"] ?? 0) / 1024 / 1024,
+                ["threads"] = Convert.ToInt32(processObj["ThreadCount"] ?? 0),
+                ["handleCount"] = Convert.ToInt32(processObj["HandleCount"] ?? 0),
+                ["priority"] = Convert.ToInt32(processObj["Priority"] ?? 0),
+                ["hostname"] = hostname ?? Environment.MachineName,
+                ["isRemote"] = isRemote
+            };
+
+            var creationDate = processObj["CreationDate"]?.ToString();
+            if (!string.IsNullOrEmpty(creationDate))
+            {
+                result["startTime"] = ManagementDateTimeConverter.ToDateTime(creationDate).ToString("o");
+            }
+
+            // For local processes, we can get additional info via System.Diagnostics
+            if (!isRemote)
             {
                 try
                 {
-                    using var searcher = new ManagementObjectSearcher(
-                        $"SELECT ParentProcessId, CommandLine, ExecutablePath FROM Win32_Process WHERE ProcessId = {pid}");
-                    foreach (ManagementObject obj in searcher.Get())
+                    var p = Process.GetProcessById(pid);
+                    result["mainWindowTitle"] = p.MainWindowTitle;
+                    try { result["cpuTimeSeconds"] = p.TotalProcessorTime.TotalSeconds; } catch { }
+
+                    if (includeModules)
                     {
-                        parentPid = Convert.ToInt32(obj["ParentProcessId"] ?? 0);
-                        commandLine = obj["CommandLine"]?.ToString() ?? "";
-                        executablePath = obj["ExecutablePath"]?.ToString() ?? "";
+                        try
+                        {
+                            var modules = p.Modules.Cast<ProcessModule>()
+                                .Select(m => new { name = m.ModuleName, path = m.FileName })
+                                .Take(50)
+                                .ToList();
+                            result["modules"] = modules;
+                            result["moduleCount"] = p.Modules.Count;
+                        }
+                        catch (Exception ex)
+                        {
+                            result["modulesError"] = ex.Message;
+                        }
                     }
                 }
                 catch { }
             }
 
-            var result = new Dictionary<string, object>
-            {
-                ["pid"] = p.Id,
-                ["parentPid"] = parentPid,
-                ["name"] = p.ProcessName,
-                ["commandLine"] = commandLine,
-                ["executablePath"] = executablePath,
-                ["memoryMB"] = p.WorkingSet64 / 1024 / 1024,
-                ["virtualMemoryMB"] = p.VirtualMemorySize64 / 1024 / 1024,
-                ["threads"] = p.Threads.Count,
-                ["handleCount"] = p.HandleCount,
-                ["priorityClass"] = p.PriorityClass.ToString(),
-                ["mainWindowTitle"] = p.MainWindowTitle
-            };
-
-            try { result["startTime"] = p.StartTime.ToString("o"); } catch { }
-            try { result["cpuTimeSeconds"] = p.TotalProcessorTime.TotalSeconds; } catch { }
-
-            if (includeModules)
-            {
-                try
-                {
-                    var modules = p.Modules.Cast<ProcessModule>()
-                        .Select(m => new { name = m.ModuleName, path = m.FileName })
-                        .Take(50)
-                        .ToList();
-                    result["modules"] = modules;
-                    result["moduleCount"] = p.Modules.Count;
-                }
-                catch (Exception ex)
-                {
-                    result["modulesError"] = ex.Message;
-                }
-            }
-
             return result;
-        }
-        catch (ArgumentException)
-        {
-            return new { error = $"Process with PID {pid} not found" };
         }
         catch (Exception ex)
         {
-            return new { error = ex.Message };
+            return new { error = $"Failed to get process details: {ex.Message}", hostname };
         }
     }
 
     [McpServerTool(Name = "get_process_tree")]
     [Description("Get process tree showing parent-child relationships")]
     public static object GetProcessTree(
-        [Description("Optional: root PID to start from (default: show all top-level)")] int? rootPid = null)
+        [Description("Optional: root PID to start from (default: show all top-level)")] int? rootPid = null,
+        [Description("Optional: remote machine name (e.g., 'SERVER01' or '192.168.1.100')")] string? hostname = null)
     {
-        var allProcesses = new Dictionary<int, (string name, int parentPid, long memoryMB)>();
-        var children = new Dictionary<int, List<int>>();
-
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             return new { error = "Process tree is only supported on Windows" };
         }
 
+        var allProcesses = new Dictionary<int, (string name, int parentPid, long memoryMB)>();
+        var children = new Dictionary<int, List<int>>();
+
         try
         {
-            using var searcher = new ManagementObjectSearcher("SELECT ProcessId, ParentProcessId, Name, WorkingSetSize FROM Win32_Process");
+            var scope = GetManagementScope(hostname);
+            using var searcher = new ManagementObjectSearcher(scope,
+                new ObjectQuery("SELECT ProcessId, ParentProcessId, Name, WorkingSetSize FROM Win32_Process"));
+
             foreach (ManagementObject obj in searcher.Get())
             {
                 var pid = Convert.ToInt32(obj["ProcessId"]);
                 var ppid = Convert.ToInt32(obj["ParentProcessId"] ?? 0);
                 var name = obj["Name"]?.ToString() ?? "Unknown";
                 var memory = Convert.ToInt64(obj["WorkingSetSize"] ?? 0) / 1024 / 1024;
-                
+
                 allProcesses[pid] = (name, ppid, memory);
-                
+
                 if (!children.ContainsKey(ppid))
                     children[ppid] = new List<int>();
                 children[ppid].Add(pid);
@@ -167,7 +191,7 @@ public static class ProcessTools
         }
         catch (Exception ex)
         {
-            return new { error = $"Failed to enumerate processes: {ex.Message}" };
+            return new { error = $"Failed to enumerate processes: {ex.Message}", hostname };
         }
 
         object BuildTree(int pid, int depth = 0)
@@ -206,32 +230,35 @@ public static class ProcessTools
             .Select(kvp => BuildTree(kvp.Key))
             .ToList();
 
-        return new { count = topLevel.Count, trees = topLevel };
+        return new
+        {
+            count = topLevel.Count,
+            hostname = hostname ?? Environment.MachineName,
+            isRemote = !string.IsNullOrEmpty(hostname),
+            trees = topLevel
+        };
     }
 
     [McpServerTool(Name = "find_process")]
     [Description("Search for processes by name, command line, or PID")]
     public static object FindProcess(
-        [Description("Search query - matches name, command line, or PID")] string query)
+        [Description("Search query - matches name, command line, or PID")] string query,
+        [Description("Optional: remote machine name (e.g., 'SERVER01' or '192.168.1.100')")] string? hostname = null)
     {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return new { error = "This tool is only supported on Windows" };
+        }
+
         var results = new List<object>();
         var isNumeric = int.TryParse(query, out var pidQuery);
 
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            // Fallback for non-Windows
-            var processes = Process.GetProcesses()
-                .Where(p => p.ProcessName.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                           (isNumeric && p.Id == pidQuery))
-                .Take(20)
-                .Select(p => new { pid = p.Id, name = p.ProcessName, memoryMB = p.WorkingSet64 / 1024 / 1024 })
-                .ToList();
-            return new { count = processes.Count, matches = processes };
-        }
-
         try
         {
-            using var searcher = new ManagementObjectSearcher("SELECT ProcessId, Name, CommandLine, WorkingSetSize FROM Win32_Process");
+            var scope = GetManagementScope(hostname);
+            using var searcher = new ManagementObjectSearcher(scope,
+                new ObjectQuery("SELECT ProcessId, Name, CommandLine, WorkingSetSize FROM Win32_Process"));
+
             foreach (ManagementObject obj in searcher.Get())
             {
                 var pid = Convert.ToInt32(obj["ProcessId"]);
@@ -256,13 +283,32 @@ public static class ProcessTools
 
                 if (results.Count >= 20) break;
             }
+
+            return new
+            {
+                count = results.Count,
+                hostname = hostname ?? Environment.MachineName,
+                isRemote = !string.IsNullOrEmpty(hostname),
+                matches = results
+            };
         }
         catch (Exception ex)
         {
-            return new { error = $"Search failed: {ex.Message}" };
+            return new { error = $"Search failed: {ex.Message}", hostname };
+        }
+    }
+
+    private static ManagementScope GetManagementScope(string? hostname)
+    {
+        if (string.IsNullOrEmpty(hostname))
+        {
+            return new ManagementScope(@"\\.\root\cimv2");
         }
 
-        return new { count = results.Count, matches = results };
+        var path = $@"\\{hostname}\root\cimv2";
+        var scope = new ManagementScope(path);
+        scope.Connect();
+        return scope;
     }
 
     private static string TruncateString(string? value, int maxLength)
