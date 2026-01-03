@@ -47,6 +47,24 @@ The built executable will be at `src/Atlas.Server/bin/Release/net8.0-windows/Atl
 
 Add Atlas to your MCP client configuration:
 
+#### GitHub Copilot (VS Code)
+
+Edit your VS Code `settings.json` or `.vscode/mcp.json`:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "atlas": {
+        "command": "C:\\path\\to\\Atlas.Server.exe"
+      }
+    }
+  }
+}
+```
+
+See [VS Code MCP documentation](https://code.visualstudio.com/docs/copilot/customization/mcp-servers) for details.
+
 #### Claude Desktop
 
 Edit `%APPDATA%\Claude\claude_desktop_config.json`:
@@ -61,19 +79,9 @@ Edit `%APPDATA%\Claude\claude_desktop_config.json`:
 }
 ```
 
-#### VS Code with Claude Extension
+#### Claude Code (CLI)
 
-Edit your VS Code settings or `.vscode/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "atlas": {
-      "command": "C:\\path\\to\\Atlas.Server.exe"
-    }
-  }
-}
-```
+Edit `~/.claude.json` or use the `/mcp` command to add servers.
 
 ## Available Tools
 
