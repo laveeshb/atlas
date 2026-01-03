@@ -30,13 +30,18 @@ Atlas is an MCP (Model Context Protocol) server that exposes Windows system diag
 
 ### Building from Source
 
-```bash
+```powershell
 git clone https://github.com/laveeshb/atlas.git
 cd atlas
-dotnet build src/Atlas.Server -c Release
+
+# Install prerequisites (checks for .NET 8 SDK)
+.\scripts\install-prereqs.ps1
+
+# Build
+.\scripts\build.ps1 -Release
 ```
 
-The built executable will be at `src/Atlas.Server/bin/Release/net8.0/Atlas.Server.exe`
+The built executable will be at `src/Atlas.Server/bin/Release/net8.0-windows/Atlas.Server.exe`
 
 ### MCP Configuration
 
