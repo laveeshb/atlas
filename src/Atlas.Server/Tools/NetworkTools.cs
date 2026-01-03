@@ -98,40 +98,84 @@ public static class NetworkTools
     [Description("List active TCP connections with owning process information")]
     public static object ListNetworkConnections()
     {
-        var rows = GetTcpTableWithOwnerPid(TCP_TABLE_OWNER_PID_ALL);
+        try
+        {
+            var rows = GetTcpTableWithOwnerPid(TCP_TABLE_OWNER_PID_ALL);
 
-        var connections = rows
-            .Where(r => r.dwState != 2) // Exclude listeners
-            .Select(r => new
+            if (rows.Count == 0)
             {
-                localAddress = FormatIpAddress(r.dwLocalAddr),
-                localPort = ConvertPort(r.dwLocalPort),
-                remoteAddress = FormatIpAddress(r.dwRemoteAddr),
-                remotePort = ConvertPort(r.dwRemotePort),
-                state = GetTcpState(r.dwState),
-                owningPid = (int)r.dwOwningPid
-            })
-            .ToList();
+                return new
+                {
+                    count = 0,
+                    connections = new List<object>(),
+                    note = "No active TCP connections found, or insufficient permissions to enumerate."
+                };
+            }
 
-        return new { count = connections.Count, connections };
+            var connections = rows
+                .Where(r => r.dwState != 2) // Exclude listeners
+                .Select(r => new
+                {
+                    localAddress = FormatIpAddress(r.dwLocalAddr),
+                    localPort = ConvertPort(r.dwLocalPort),
+                    remoteAddress = FormatIpAddress(r.dwRemoteAddr),
+                    remotePort = ConvertPort(r.dwRemotePort),
+                    state = GetTcpState(r.dwState),
+                    owningPid = (int)r.dwOwningPid
+                })
+                .ToList();
+
+            return new { count = connections.Count, connections };
+        }
+        catch (Exception ex)
+        {
+            return new
+            {
+                error = "Failed to list network connections",
+                details = ex.Message,
+                suggestion = "This operation requires access to the TCP/IP stack. Try running as Administrator."
+            };
+        }
     }
 
     [McpServerTool(Name = "list_tcp_listeners")]
     [Description("List all TCP ports being listened on with owning process information")]
     public static object ListTcpListeners()
     {
-        var rows = GetTcpTableWithOwnerPid(TCP_TABLE_OWNER_PID_LISTENER);
+        try
+        {
+            var rows = GetTcpTableWithOwnerPid(TCP_TABLE_OWNER_PID_LISTENER);
 
-        var listeners = rows
-            .Select(r => new
+            if (rows.Count == 0)
             {
-                address = FormatIpAddress(r.dwLocalAddr),
-                port = ConvertPort(r.dwLocalPort),
-                owningPid = (int)r.dwOwningPid
-            })
-            .OrderBy(l => l.port)
-            .ToList();
+                return new
+                {
+                    count = 0,
+                    listeners = new List<object>(),
+                    note = "No TCP listeners found, or insufficient permissions to enumerate."
+                };
+            }
 
-        return new { count = listeners.Count, listeners };
+            var listeners = rows
+                .Select(r => new
+                {
+                    address = FormatIpAddress(r.dwLocalAddr),
+                    port = ConvertPort(r.dwLocalPort),
+                    owningPid = (int)r.dwOwningPid
+                })
+                .OrderBy(l => l.port)
+                .ToList();
+
+            return new { count = listeners.Count, listeners };
+        }
+        catch (Exception ex)
+        {
+            return new
+            {
+                error = "Failed to list TCP listeners",
+                details = ex.Message,
+                suggestion = "This operation requires access to the TCP/IP stack. Try running as Administrator."
+            };
+        }
     }
 }
