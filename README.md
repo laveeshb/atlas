@@ -135,6 +135,12 @@ All process tools support an optional `hostname` parameter to query remote Windo
 | `analyze_dump` | Basic dump analysis - type detection, CLR info, threads |
 | `list_dumps` | Find .dmp files in common crash dump locations |
 
+### System Tools
+
+| Tool | Description |
+|------|-------------|
+| `get_system_info` | OS version, processor count, memory, uptime, .NET version |
+
 ## Usage Examples
 
 ### Investigating High Memory Usage
@@ -209,7 +215,6 @@ The `hostname` parameter for process tools:
 
 ## Roadmap
 
-- **Remote network tools** - Extend hostname support to network connection queries
 - **Kernel dump analysis** - Currently only .NET user-mode dumps are supported
 - **Linux support** - Process and dump analysis for Linux systems
 - **Performance counters** - Real-time CPU, memory, disk metrics
