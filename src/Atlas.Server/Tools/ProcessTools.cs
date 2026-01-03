@@ -62,7 +62,7 @@ public static class ProcessTools
         }
         catch (Exception ex)
         {
-            return new { error = $"Failed to list processes: {ex.Message}", hostname };
+            return FormatError(ex, "List processes", hostname);
         }
     }
 
@@ -138,6 +138,18 @@ public static class ProcessTools
                             result["modules"] = modules;
                             result["moduleCount"] = p.Modules.Count;
                         }
+                        catch (System.ComponentModel.Win32Exception win32Ex) when (win32Ex.NativeErrorCode == 299)
+                        {
+                            // ERROR_PARTIAL_COPY - 32-bit process trying to access 64-bit process
+                            result["modulesError"] = "Cannot enumerate modules: architecture mismatch (32-bit vs 64-bit process).";
+                            result["modulesSuggestion"] = "Run Atlas from a 64-bit process to inspect 64-bit targets.";
+                        }
+                        catch (System.ComponentModel.Win32Exception win32Ex) when (win32Ex.NativeErrorCode == 5)
+                        {
+                            // ERROR_ACCESS_DENIED
+                            result["modulesError"] = "Access denied when reading modules.";
+                            result["modulesSuggestion"] = "Run as Administrator to access protected process modules.";
+                        }
                         catch (Exception ex)
                         {
                             result["modulesError"] = ex.Message;
@@ -151,7 +163,7 @@ public static class ProcessTools
         }
         catch (Exception ex)
         {
-            return new { error = $"Failed to get process details: {ex.Message}", hostname };
+            return FormatError(ex, "Get process details", hostname);
         }
     }
 
@@ -191,7 +203,7 @@ public static class ProcessTools
         }
         catch (Exception ex)
         {
-            return new { error = $"Failed to enumerate processes: {ex.Message}", hostname };
+            return FormatError(ex, "Get process tree", hostname);
         }
 
         object BuildTree(int pid, int depth = 0)
@@ -294,21 +306,81 @@ public static class ProcessTools
         }
         catch (Exception ex)
         {
-            return new { error = $"Search failed: {ex.Message}", hostname };
+            return FormatError(ex, "Find process", hostname);
         }
     }
 
     private static ManagementScope GetManagementScope(string? hostname)
     {
+        var options = new ConnectionOptions
+        {
+            Timeout = TimeSpan.FromSeconds(30),
+            EnablePrivileges = true
+        };
+
         if (string.IsNullOrEmpty(hostname))
         {
-            return new ManagementScope(@"\\.\root\cimv2");
+            var scope = new ManagementScope(@"\\.\root\cimv2", options);
+            scope.Connect();
+            return scope;
         }
 
         var path = $@"\\{hostname}\root\cimv2";
-        var scope = new ManagementScope(path);
-        scope.Connect();
-        return scope;
+        var remoteScope = new ManagementScope(path, options);
+        remoteScope.Connect();
+        return remoteScope;
+    }
+
+    private static object FormatError(Exception ex, string operation, string? hostname = null)
+    {
+        var error = new Dictionary<string, object>
+        {
+            ["error"] = $"{operation} failed",
+            ["details"] = ex.Message
+        };
+
+        if (!string.IsNullOrEmpty(hostname))
+        {
+            error["hostname"] = hostname;
+        }
+
+        // Provide actionable guidance based on exception type
+        if (ex is UnauthorizedAccessException || ex.Message.Contains("Access denied", StringComparison.OrdinalIgnoreCase))
+        {
+            error["suggestion"] = "Run as Administrator to access all processes, or the target process may be protected.";
+            error["errorType"] = "access_denied";
+        }
+        else if (ex is System.Runtime.InteropServices.COMException comEx)
+        {
+            if (comEx.HResult == unchecked((int)0x800706BA)) // RPC server unavailable
+            {
+                error["suggestion"] = $"Could not connect to remote machine. Verify: (1) hostname '{hostname}' is correct, (2) machine is online, (3) WMI service is running, (4) firewall allows WMI (TCP 135 + dynamic ports).";
+                error["errorType"] = "rpc_unavailable";
+            }
+            else if (comEx.HResult == unchecked((int)0x80070005)) // Access denied
+            {
+                error["suggestion"] = "Access denied to remote machine. Verify you have admin rights on the target machine.";
+                error["errorType"] = "remote_access_denied";
+            }
+            else
+            {
+                error["suggestion"] = "WMI query failed. The remote machine may be unavailable or WMI service may not be running.";
+                error["errorType"] = "wmi_error";
+                error["hresult"] = $"0x{comEx.HResult:X8}";
+            }
+        }
+        else if (ex is TimeoutException || ex.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase))
+        {
+            error["suggestion"] = "Operation timed out. The target machine may be slow to respond or under heavy load.";
+            error["errorType"] = "timeout";
+        }
+        else if (ex is InvalidOperationException && ex.Message.Contains("32-bit"))
+        {
+            error["suggestion"] = "Cannot access modules of a 64-bit process from a 32-bit process (or vice versa).";
+            error["errorType"] = "architecture_mismatch";
+        }
+
+        return error;
     }
 
     private static string TruncateString(string? value, int maxLength)
