@@ -1,3 +1,4 @@
+using Microsoft.Diagnostics.NETCore.Client;
 using Microsoft.Diagnostics.Runtime;
 using ModelContextProtocol.Server;
 using System.ComponentModel;
@@ -310,5 +311,101 @@ public static class DumpTools
             searchedPaths = searchPaths.Where(p => Directory.Exists(p) || File.Exists(p)).ToList(),
             dumps = dumps.OrderByDescending(d => ((dynamic)d).modified).Take(20).ToList()
         };
+    }
+
+    [McpServerTool(Name = "collect_dump")]
+    [Description("Collect a memory dump from a running .NET process")]
+    public static object CollectDump(
+        [Description("Process ID to dump")] int processId,
+        [Description("Output path for the .dmp file (optional - defaults to temp folder)")] string? outputPath = null,
+        [Description("Dump type: 'mini' (smaller, heap only) or 'full' (larger, complete memory). Default: mini")] string dumpType = "mini")
+    {
+        try
+        {
+            // Validate process exists
+            System.Diagnostics.Process process;
+            try
+            {
+                process = System.Diagnostics.Process.GetProcessById(processId);
+            }
+            catch (ArgumentException)
+            {
+                return new
+                {
+                    error = $"Process with ID {processId} not found",
+                    suggestion = "Use list_processes to find valid process IDs"
+                };
+            }
+
+            // Determine output path
+            var fileName = $"{process.ProcessName}_{processId}_{DateTime.Now:yyyyMMdd_HHmmss}.dmp";
+            var finalPath = string.IsNullOrEmpty(outputPath)
+                ? Path.Combine(Path.GetTempPath(), fileName)
+                : outputPath.EndsWith(".dmp", StringComparison.OrdinalIgnoreCase)
+                    ? outputPath
+                    : Path.Combine(outputPath, fileName);
+
+            // Ensure directory exists
+            var directory = Path.GetDirectoryName(finalPath);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            // Determine dump type
+            var writeDumpType = dumpType.ToLowerInvariant() switch
+            {
+                "full" => DumpType.Full,
+                "mini" => DumpType.WithHeap,
+                "heap" => DumpType.WithHeap,
+                _ => DumpType.WithHeap
+            };
+
+            // Collect the dump using DiagnosticsClient
+            var client = new DiagnosticsClient(processId);
+            client.WriteDump(writeDumpType, finalPath, logDumpGeneration: false);
+
+            var fileInfo = new FileInfo(finalPath);
+            return new
+            {
+                success = true,
+                processId,
+                processName = process.ProcessName,
+                dumpPath = finalPath,
+                dumpType = writeDumpType.ToString(),
+                sizeMB = Math.Round(fileInfo.Length / 1024.0 / 1024.0, 2),
+                sizeBytes = fileInfo.Length,
+                created = fileInfo.CreationTime.ToString("o"),
+                suggestion = $"Use analyze_dump with path '{finalPath}' to analyze this dump"
+            };
+        }
+        catch (UnsupportedCommandException)
+        {
+            return new
+            {
+                error = "Process does not support dump collection",
+                details = "The target process may not be a .NET process or may not have the diagnostic server enabled",
+                suggestion = "For native processes, use Task Manager or procdump.exe to collect dumps"
+            };
+        }
+        catch (ServerNotAvailableException)
+        {
+            return new
+            {
+                error = "Diagnostic server not available",
+                details = "The .NET diagnostic server is not running in the target process",
+                suggestion = "Ensure the process is a .NET 5+ application or .NET Core 3.0+ with diagnostics enabled"
+            };
+        }
+        catch (Exception ex)
+        {
+            return new
+            {
+                error = "Failed to collect dump",
+                details = ex.Message,
+                errorType = ex.GetType().Name,
+                suggestion = "Ensure you have sufficient permissions and the process is accessible"
+            };
+        }
     }
 }
