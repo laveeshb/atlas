@@ -6,24 +6,25 @@ using Atlas.Server.Debugging.Parsers;
 namespace Atlas.Server.Tools;
 
 /// <summary>
-/// MCP tools for remote dump analysis via WinDbg debug server.
-/// The server must be started with the dump already loaded:
-///   cdb -server tcp:port=5005 -z C:\dumps\app.dmp
+/// MCP tools for remote dump analysis via remote.exe.
+/// 
+/// Server setup (on the remote machine):
+///   remote.exe /s "cdb -z C:\dumps\crash.dmp" DumpSession
+/// 
+/// Connection format: "hostname/session" or "server=hostname,session=name"
 /// </summary>
 [McpServerToolType]
 public static class RemoteDebugTools
 {
     [McpServerTool(Name = "remote_analyze_crash")]
-    [Description("Analyze a crash dump on a remote WinDbg debug server. The dump must already be loaded on the server (started with 'cdb -server tcp:port=5005 -z dump.dmp'). Returns structured crash analysis including exception info, faulting module, and stack trace.")]
+    [Description("Analyze a crash dump on a remote debug session. Server must be started with: remote.exe /s \"cdb -z dump.dmp\" SessionName. Returns structured crash analysis including exception info, faulting module, and stack trace.")]
     public static async Task<object> RemoteAnalyzeCrash(
-        [Description("WinDbg connection string (e.g., 'tcp:server=vm2,port=5005' or 'ssl:server=vm2,port=5005')")] 
-        string connectionString,
-        [Description("Debug server password (if required)")] 
-        string? password = null)
+        [Description("Connection string: 'hostname/session' or 'server=hostname,session=name' (e.g., 'vm2/DumpSession')")] 
+        string connectionString)
     {
         try
         {
-            await using var session = await DebugSession.ConnectAsync(connectionString, password);
+            await using var session = await DebugSession.ConnectAsync(connectionString);
             
             var analyzeOutput = await session.AnalyzeCrashAsync();
             var result = AnalyzeParser.Parse(analyzeOutput);
@@ -31,7 +32,7 @@ public static class RemoteDebugTools
             return new
             {
                 status = "success",
-                connectionString = SanitizeConnectionString(connectionString),
+                connectionString,
                 crashType = result.CrashType,
                 exceptionCode = result.ExceptionCode,
                 exceptionDescription = result.ExceptionDescription,
@@ -58,26 +59,24 @@ public static class RemoteDebugTools
             return new 
             { 
                 error = "Remote analysis failed", 
-                message = SanitizePassword(ex.Message),
-                connectionString = SanitizeConnectionString(connectionString),
+                message = ex.Message,
+                connectionString,
                 suggestion = GetSuggestion(ex)
             };
         }
     }
 
     [McpServerTool(Name = "remote_heap_stats")]
-    [Description("Get heap statistics from a dump on a remote debug server. The dump must already be loaded on the server. Shows object counts and sizes by type.")]
+    [Description("Get heap statistics from a dump on a remote debug session. Shows object counts and sizes by type.")]
     public static async Task<object> RemoteHeapStats(
-        [Description("WinDbg connection string (e.g., 'tcp:server=vm2,port=5005')")] 
+        [Description("Connection string: 'hostname/session' (e.g., 'vm2/DumpSession')")] 
         string connectionString,
-        [Description("Debug server password (if required)")] 
-        string? password = null,
         [Description("Number of top types to return (default: 50)")] 
         int top = 50)
     {
         try
         {
-            await using var session = await DebugSession.ConnectAsync(connectionString, password);
+            await using var session = await DebugSession.ConnectAsync(connectionString);
 
             var heapOutput = await session.DumpHeapStatsAsync();
             var result = HeapStatsParser.Parse(heapOutput);
@@ -103,25 +102,23 @@ public static class RemoteDebugTools
             return new 
             { 
                 error = "Remote heap analysis failed", 
-                message = SanitizePassword(ex.Message),
+                message = ex.Message,
                 suggestion = GetSuggestion(ex)
             };
         }
     }
 
     [McpServerTool(Name = "remote_stack_trace")]
-    [Description("Get stack trace from a dump on a remote debug server. The dump must already be loaded on the server. Supports both managed (.NET) and native stacks.")]
+    [Description("Get stack trace from a dump on a remote debug session. Supports both managed (.NET) and native stacks.")]
     public static async Task<object> RemoteStackTrace(
-        [Description("WinDbg connection string (e.g., 'tcp:server=vm2,port=5005')")] 
+        [Description("Connection string: 'hostname/session' (e.g., 'vm2/DumpSession')")] 
         string connectionString,
         [Description("Stack type: 'managed' for .NET (!clrstack) or 'native' for native (k). Default: managed")] 
-        string stackType = "managed",
-        [Description("Debug server password (if required)")] 
-        string? password = null)
+        string stackType = "managed")
     {
         try
         {
-            await using var session = await DebugSession.ConnectAsync(connectionString, password);
+            await using var session = await DebugSession.ConnectAsync(connectionString);
             
             string stackOutput;
             StackTraceResult result;
@@ -159,23 +156,21 @@ public static class RemoteDebugTools
             return new 
             { 
                 error = "Remote stack trace failed", 
-                message = SanitizePassword(ex.Message),
+                message = ex.Message,
                 suggestion = GetSuggestion(ex)
             };
         }
     }
 
     [McpServerTool(Name = "remote_list_modules")]
-    [Description("List loaded modules from a dump on a remote debug server. The dump must already be loaded on the server.")]
+    [Description("List loaded modules from a dump on a remote debug session.")]
     public static async Task<object> RemoteListModules(
-        [Description("WinDbg connection string (e.g., 'tcp:server=vm2,port=5005')")] 
-        string connectionString,
-        [Description("Debug server password (if required)")] 
-        string? password = null)
+        [Description("Connection string: 'hostname/session' (e.g., 'vm2/DumpSession')")] 
+        string connectionString)
     {
         try
         {
-            await using var session = await DebugSession.ConnectAsync(connectionString, password);
+            await using var session = await DebugSession.ConnectAsync(connectionString);
             
             var modulesOutput = await session.ListModulesAsync();
             var result = ModuleParser.Parse(modulesOutput);
@@ -199,25 +194,23 @@ public static class RemoteDebugTools
             return new 
             { 
                 error = "Remote module list failed", 
-                message = SanitizePassword(ex.Message),
+                message = ex.Message,
                 suggestion = GetSuggestion(ex)
             };
         }
     }
 
     [McpServerTool(Name = "remote_debug_command")]
-    [Description("Execute an arbitrary WinDbg command on a remote debug server. The dump must already be loaded on the server. For advanced users.")]
+    [Description("Execute an arbitrary WinDbg command on a remote debug session. For advanced users.")]
     public static async Task<object> RemoteDebugCommand(
-        [Description("WinDbg connection string (e.g., 'tcp:server=vm2,port=5005')")] 
+        [Description("Connection string: 'hostname/session' (e.g., 'vm2/DumpSession')")] 
         string connectionString,
         [Description("WinDbg command to execute (e.g., '!pe', '!threads', 'vertarget')")] 
-        string command,
-        [Description("Debug server password (if required)")] 
-        string? password = null)
+        string command)
     {
         try
         {
-            await using var session = await DebugSession.ConnectAsync(connectionString, password);
+            await using var session = await DebugSession.ConnectAsync(connectionString);
             
             var output = await session.ExecuteCommandAsync(command);
 
@@ -233,48 +226,38 @@ public static class RemoteDebugTools
             return new 
             { 
                 error = "Remote command failed", 
-                message = SanitizePassword(ex.Message),
+                message = ex.Message,
                 command,
                 suggestion = GetSuggestion(ex)
             };
         }
     }
 
-    private static string SanitizeConnectionString(string connectionString)
-    {
-        // Remove password from connection string for logging
-        return SanitizePassword(connectionString);
-    }
-
-    private static string SanitizePassword(string text)
-    {
-        // Remove password values from any text (connection strings, error messages, etc.)
-        return System.Text.RegularExpressions.Regex.Replace(
-            text, 
-            @"password=[^,\s\'\""]+", 
-            "password=***",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-    }
-
     private static string GetSuggestion(Exception ex)
     {
-        if (ex.Message.Contains("cdb.exe", StringComparison.OrdinalIgnoreCase))
+        if (ex.Message.Contains("remote.exe", StringComparison.OrdinalIgnoreCase))
         {
-            return "Ensure Debugging Tools for Windows is installed (part of Windows SDK). Add cdb.exe to PATH or specify full path.";
+            return "Ensure Debugging Tools for Windows is installed (part of Windows SDK). Add remote.exe to PATH.";
         }
 
         if (ex.Message.Contains("connect", StringComparison.OrdinalIgnoreCase) || 
-            ex.Message.Contains("remote", StringComparison.OrdinalIgnoreCase))
+            ex.Message.Contains("session", StringComparison.OrdinalIgnoreCase))
         {
-            return "Could not connect to debug server. Verify: (1) cdb -server is running on the target with -z dump.dmp, (2) connection string is correct, (3) firewall allows the port, (4) password is correct if used.";
+            return "Could not connect to debug session. Verify: (1) remote.exe /s \"cdb -z dump.dmp\" SessionName is running on the target, (2) connection string format is 'hostname/session', (3) firewall allows SMB (port 445).";
         }
 
         if (ex is TimeoutException)
         {
-            return "Debug server not responding. The server may be busy or the connection may have been lost.";
+            return "Debug session not responding. The server may be busy or the connection may have been lost.";
         }
 
-        return "Check connection string format and ensure the remote debug server is accessible.";
+        if (ex.Message.Contains("format", StringComparison.OrdinalIgnoreCase) ||
+            ex.Message.Contains("Invalid", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Connection string format: 'hostname/session' (e.g., 'vm2/DumpSession') or 'server=hostname,session=name'.";
+        }
+
+        return "Check connection string format (hostname/session) and ensure the remote debug session is accessible.";
     }
 
     private static string TruncateOutput(string output, int maxLength)

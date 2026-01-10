@@ -1,9 +1,9 @@
 # Remote Debug Integration Test
-# Requires: Debugging Tools for Windows installed (cdb.exe in PATH)
+# Requires: Debugging Tools for Windows installed (remote.exe, cdb.exe in PATH)
 
 param(
     [string]$DumpPath = "$PSScriptRoot\..\test-dump.dmp",
-    [int]$Port = 5005
+    [string]$SessionName = "TestSession"
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +13,15 @@ Write-Host ""
 
 # Check prerequisites
 Write-Host "Checking prerequisites..." -ForegroundColor Yellow
+
+$remote = Get-Command remote.exe -ErrorAction SilentlyContinue
+if (-not $remote) {
+    Write-Host "ERROR: remote.exe not found in PATH" -ForegroundColor Red
+    Write-Host "Install Windows SDK with 'Debugging Tools for Windows' option" -ForegroundColor Yellow
+    Write-Host "Then add to PATH: C:\Program Files (x86)\Windows Kits\10\Debuggers\x64" -ForegroundColor Yellow
+    exit 1
+}
+Write-Host "  remote.exe: $($remote.Source)" -ForegroundColor Green
 
 $cdb = Get-Command cdb.exe -ErrorAction SilentlyContinue
 if (-not $cdb) {
@@ -30,79 +39,65 @@ if (-not (Test-Path $DumpPath)) {
 $DumpPath = Resolve-Path $DumpPath
 Write-Host "  Dump file: $DumpPath" -ForegroundColor Green
 
-# Check if port is available
-$listener = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
-if ($listener) {
-    Write-Host "ERROR: Port $Port is already in use" -ForegroundColor Red
-    exit 1
-}
-Write-Host "  Port $Port: Available" -ForegroundColor Green
-
 Write-Host ""
-Write-Host "Starting cdb debug server on localhost:$Port with dump loaded..." -ForegroundColor Yellow
+Write-Host "Starting remote.exe session '$SessionName' with dump loaded..." -ForegroundColor Yellow
 
-# Start cdb as debug server with dump already loaded
-# This is the correct architecture: server has the dump, client just connects
-$serverProcess = Start-Process -FilePath "cdb.exe" -ArgumentList "-server tcp:port=$Port -z `"$DumpPath`"" -PassThru -WindowStyle Hidden
+# Start remote.exe as session server with cdb and dump loaded
+# This provides persistent, multi-client access to the dump
+$serverProcess = Start-Process -FilePath "remote.exe" -ArgumentList "/s `"cdb -z $DumpPath`" $SessionName" -PassThru -WindowStyle Hidden
 
 Start-Sleep -Seconds 3
 
 if ($serverProcess.HasExited) {
-    Write-Host "ERROR: cdb debug server failed to start" -ForegroundColor Red
+    Write-Host "ERROR: remote.exe session failed to start" -ForegroundColor Red
     exit 1
 }
 
-Write-Host "  Debug server started (PID: $($serverProcess.Id))" -ForegroundColor Green
+Write-Host "  Session started (PID: $($serverProcess.Id))" -ForegroundColor Green
 
 try {
     Write-Host ""
     Write-Host "Testing client connection..." -ForegroundColor Yellow
     
-    # Create a script for client cdb to run
-    $cdbScript = @"
-vertarget
-lm
-q
-"@
+    # Test connection with a simple command
+    # Use cmd /c with echo to send command and exit
+    $testOutput = cmd /c "echo vertarget | remote.exe /c localhost $SessionName 2>&1"
     
-    $tempScript = [System.IO.Path]::GetTempFileName()
-    $cdbScript | Out-File -FilePath $tempScript -Encoding ascii
+    $outputText = $testOutput -join "`n"
     
-    $cdbOutput = & cdb.exe -remote "tcp:server=localhost,port=$Port" -cf $tempScript 2>&1
-    $cdbExitCode = $LASTEXITCODE
-    
-    Remove-Item $tempScript -ErrorAction SilentlyContinue
-    
-    # Check if we got meaningful output
-    $outputText = $cdbOutput -join "`n"
-    
-    if ($outputText -match "Connected to server") {
+    if ($outputText -match "Windows|Debug session|Dump|Target") {
         Write-Host "  Connection successful!" -ForegroundColor Green
-    } else {
-        Write-Host "WARNING: Connection might have issues" -ForegroundColor Yellow
-        Write-Host $outputText
-    }
-    
-    if ($outputText -match "Windows|Debug session") {
         Write-Host "  Dump loaded and accessible!" -ForegroundColor Green
+    } else {
+        Write-Host "  Testing via query..." -ForegroundColor Yellow
+        $queryOutput = & remote.exe /q localhost 2>&1
+        if ($queryOutput -match $SessionName) {
+            Write-Host "  Session '$SessionName' is running!" -ForegroundColor Green
+        } else {
+            Write-Host "WARNING: Could not verify session" -ForegroundColor Yellow
+            Write-Host $queryOutput
+        }
     }
     
     Write-Host ""
     Write-Host "=== Test Passed ===" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "The debug server is running. You can now test Atlas remote tools:" -ForegroundColor Yellow
+    Write-Host "The remote session is running. You can now test Atlas remote tools:" -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "  Connection string: tcp:server=localhost,port=$Port" -ForegroundColor White
-    Write-Host "  (Dump is already loaded on the server)" -ForegroundColor Gray
+    Write-Host "  Connection string: localhost/$SessionName" -ForegroundColor White
+    Write-Host "  (Dump is already loaded in the session)" -ForegroundColor Gray
     Write-Host ""
     Write-Host "Example prompt for Copilot:" -ForegroundColor Yellow
-    Write-Host "  'Analyze the crash on debug server tcp:server=localhost,port=$Port'" -ForegroundColor White
+    Write-Host "  'Analyze the crash on localhost/$SessionName'" -ForegroundColor White
     Write-Host ""
-    Write-Host "Press Enter to stop the debug server and exit..." -ForegroundColor Gray
+    Write-Host "Or connect manually:" -ForegroundColor Yellow
+    Write-Host "  remote.exe /c localhost $SessionName" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Press Enter to stop the session and exit..." -ForegroundColor Gray
     Read-Host
     
 } finally {
-    Write-Host "Stopping debug server..." -ForegroundColor Yellow
+    Write-Host "Stopping remote session..." -ForegroundColor Yellow
     Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
     Write-Host "Done." -ForegroundColor Green
 }

@@ -5,7 +5,13 @@ using System.Text.RegularExpressions;
 namespace Atlas.Server.Debugging;
 
 /// <summary>
-/// Manages a connection to a WinDbg debug server via cdb.exe.
+/// Manages a connection to a remote debug session via remote.exe.
+/// 
+/// Server setup (on VM2):
+///   remote.exe /s "cdb -z C:\dumps\crash.dmp" DumpSession
+/// 
+/// This class connects as a client using:
+///   remote.exe /c ServerName SessionName
 /// </summary>
 public sealed class DebugSession : IAsyncDisposable
 {
@@ -24,26 +30,81 @@ public sealed class DebugSession : IAsyncDisposable
     }
 
     /// <summary>
-    /// Connect to a remote debug server.
+    /// Connect to a remote debug session via remote.exe using connection string.
+    /// Parses connection string to extract server and session.
+    /// Format: "hostname/sessionname", "hostname sessionname", or "server=hostname,session=name"
     /// </summary>
-    /// <param name="connectionString">WinDbg connection string (e.g., "tcp:server=vm2,port=5005")</param>
-    /// <param name="password">Optional password (appended to connection string if provided)</param>
-    /// <param name="cdbPath">Path to cdb.exe (defaults to searching PATH)</param>
-    /// <param name="cancellationToken">Cancellation token</param>
     public static async Task<DebugSession> ConnectAsync(
         string connectionString,
-        string? password = null,
-        string? cdbPath = null,
+        string? remotePath = null,
         CancellationToken cancellationToken = default)
     {
-        var fullConnectionString = string.IsNullOrEmpty(password)
-            ? connectionString
-            : $"{connectionString},password={password}";
+        // Parse connection string
+        // Supported formats:
+        //   "hostname/sessionname"
+        //   "hostname sessionname" 
+        //   "server=hostname,session=name"
+        
+        string serverName;
+        string sessionName;
 
+        if (connectionString.Contains('='))
+        {
+            // Parse key=value format
+            var parts = connectionString.Split(',');
+            var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var part in parts)
+            {
+                var kv = part.Split('=', 2);
+                if (kv.Length == 2)
+                {
+                    dict[kv[0].Trim()] = kv[1].Trim();
+                }
+            }
+            
+            serverName = dict.GetValueOrDefault("server") ?? 
+                         throw new ArgumentException("Connection string must include 'server=hostname'");
+            sessionName = dict.GetValueOrDefault("session") ?? 
+                          throw new ArgumentException("Connection string must include 'session=name'");
+        }
+        else if (connectionString.Contains('/'))
+        {
+            var parts = connectionString.Split('/', 2);
+            serverName = parts[0].Trim();
+            sessionName = parts[1].Trim();
+        }
+        else if (connectionString.Contains(' '))
+        {
+            var parts = connectionString.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            serverName = parts[0].Trim();
+            sessionName = parts.Length > 1 ? parts[1].Trim() : throw new ArgumentException("Session name required");
+        }
+        else
+        {
+            throw new ArgumentException(
+                "Invalid connection string format. Use 'hostname/session', 'hostname session', or 'server=hostname,session=name'");
+        }
+
+        return await ConnectWithParamsAsync(serverName, sessionName, remotePath, cancellationToken);
+    }
+
+    /// <summary>
+    /// Connect to a remote debug session via remote.exe with explicit server and session.
+    /// </summary>
+    /// <param name="serverName">Server machine name or IP (e.g., "vm2" or "10.0.0.5")</param>
+    /// <param name="sessionName">Session name specified when starting the server (e.g., "DumpSession")</param>
+    /// <param name="remotePath">Path to remote.exe (defaults to searching PATH)</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    public static async Task<DebugSession> ConnectWithParamsAsync(
+        string serverName,
+        string sessionName,
+        string? remotePath = null,
+        CancellationToken cancellationToken = default)
+    {
         var startInfo = new ProcessStartInfo
         {
-            FileName = cdbPath ?? "cdb.exe",
-            Arguments = $"-remote {fullConnectionString}",
+            FileName = remotePath ?? "remote.exe",
+            Arguments = $"/c {serverName} {sessionName}",
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -60,7 +121,7 @@ public sealed class DebugSession : IAsyncDisposable
         catch (Exception ex)
         {
             throw new InvalidOperationException(
-                $"Failed to start cdb.exe. Ensure Debugging Tools for Windows is installed. Error: {ex.Message}", ex);
+                $"Failed to start remote.exe. Ensure Debugging Tools for Windows is installed. Error: {ex.Message}", ex);
         }
 
         var session = new DebugSession(process);
@@ -74,18 +135,10 @@ public sealed class DebugSession : IAsyncDisposable
         {
             await session.DisposeAsync();
             throw new InvalidOperationException(
-                $"Failed to connect to debug server at '{connectionString}'. Error: {ex.Message}", ex);
+                $"Failed to connect to debug session '{sessionName}' on '{serverName}'. Error: {ex.Message}", ex);
         }
 
         return session;
-    }
-
-    /// <summary>
-    /// Open a dump file on the remote machine.
-    /// </summary>
-    public async Task<string> OpenDumpAsync(string dumpPath, CancellationToken cancellationToken = default)
-    {
-        return await ExecuteCommandAsync($".opendump {dumpPath}", cancellationToken);
     }
 
     /// <summary>
@@ -148,7 +201,32 @@ public sealed class DebugSession : IAsyncDisposable
         => ExecuteCommandAsync("!threads", cancellationToken);
 
     /// <summary>
-    /// Quit the debug session.
+    /// Disconnect from the debug session without stopping the server.
+    /// For remote.exe, we just kill the client process - the server keeps running.
+    /// </summary>
+    public async Task DisconnectAsync()
+    {
+        if (_isDisposed) return;
+
+        try
+        {
+            // Just kill the remote.exe client - server stays alive
+            if (!_process.HasExited)
+            {
+                _process.Kill();
+                await _process.WaitForExitAsync();
+            }
+        }
+        catch
+        {
+            // Ignore errors during cleanup
+        }
+    }
+
+    /// <summary>
+    /// Quit the debug session AND stop the server.
+    /// Sends 'q' to cdb, which terminates the remote.exe server.
+    /// Use DisconnectAsync() if you want to keep the server running.
     /// </summary>
     public async Task QuitAsync()
     {
@@ -243,7 +321,8 @@ public sealed class DebugSession : IAsyncDisposable
         if (_isDisposed) return;
         _isDisposed = true;
 
-        await QuitAsync();
+        // Disconnect without stopping the server
+        await DisconnectAsync();
         
         _process.Dispose();
         _commandLock.Dispose();

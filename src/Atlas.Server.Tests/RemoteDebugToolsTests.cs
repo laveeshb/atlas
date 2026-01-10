@@ -4,7 +4,7 @@ using System.Text.Json;
 namespace Atlas.Server.Tests;
 
 /// <summary>
-/// Tests for RemoteDebugTools that don't require actual cdb.exe.
+/// Tests for RemoteDebugTools that don't require actual remote.exe connections.
 /// These test error handling and input validation.
 /// </summary>
 public class RemoteDebugToolsTests
@@ -14,7 +14,7 @@ public class RemoteDebugToolsTests
     {
         // This will fail to connect (no server running), but should handle gracefully
         var result = await RemoteDebugTools.RemoteAnalyzeCrash(
-            connectionString: "tcp:server=nonexistent.invalid,port=99999");
+            connectionString: "nonexistent.invalid/TestSession");
 
         var json = JsonSerializer.Serialize(result);
         var doc = JsonDocument.Parse(json);
@@ -28,7 +28,7 @@ public class RemoteDebugToolsTests
     public async Task RemoteHeapStats_WithInvalidConnectionString_ReturnsError()
     {
         var result = await RemoteDebugTools.RemoteHeapStats(
-            connectionString: "tcp:server=nonexistent.invalid,port=99999");
+            connectionString: "nonexistent.invalid/TestSession");
 
         var json = JsonSerializer.Serialize(result);
         var doc = JsonDocument.Parse(json);
@@ -40,7 +40,7 @@ public class RemoteDebugToolsTests
     public async Task RemoteStackTrace_WithInvalidConnectionString_ReturnsError()
     {
         var result = await RemoteDebugTools.RemoteStackTrace(
-            connectionString: "tcp:server=nonexistent.invalid,port=99999",
+            connectionString: "nonexistent.invalid/TestSession",
             stackType: "managed");
 
         var json = JsonSerializer.Serialize(result);
@@ -51,7 +51,7 @@ public class RemoteDebugToolsTests
     public async Task RemoteListModules_WithInvalidConnectionString_ReturnsError()
     {
         var result = await RemoteDebugTools.RemoteListModules(
-            connectionString: "tcp:server=nonexistent.invalid,port=99999");
+            connectionString: "nonexistent.invalid/TestSession");
 
         var json = JsonSerializer.Serialize(result);
         Assert.Contains("error", json);
@@ -61,7 +61,7 @@ public class RemoteDebugToolsTests
     public async Task RemoteDebugCommand_WithInvalidConnectionString_ReturnsError()
     {
         var result = await RemoteDebugTools.RemoteDebugCommand(
-            connectionString: "tcp:server=nonexistent.invalid,port=99999",
+            connectionString: "nonexistent.invalid/TestSession",
             command: "vertarget");
 
         var json = JsonSerializer.Serialize(result);
@@ -69,27 +69,28 @@ public class RemoteDebugToolsTests
     }
 
     [Fact]
-    public async Task RemoteAnalyzeCrash_PasswordIsSanitizedInResponse()
+    public async Task RemoteAnalyzeCrash_WithBadFormat_ReturnsHelpfulSuggestion()
     {
+        // Test with completely invalid format
         var result = await RemoteDebugTools.RemoteAnalyzeCrash(
-            connectionString: "tcp:server=test,port=5005,password=supersecret");
+            connectionString: "invalid-no-session");
 
         var json = JsonSerializer.Serialize(result);
         
-        // Password should be masked in any returned connection string
-        Assert.DoesNotContain("supersecret", json);
+        Assert.Contains("error", json);
+        Assert.Contains("suggestion", json);
     }
 
     [Fact]
-    public async Task ConnectionStringSanitization_RemovesPassword()
+    public async Task ConnectionString_SupportsMultipleFormats()
     {
-        // Test via the error response which includes sanitized connection string
-        var result = await RemoteDebugTools.RemoteAnalyzeCrash(
-            connectionString: "ssl:server=myvm,port=5005,password=MySecretPass123");
+        // These should all parse correctly (though fail to connect)
+        // Format: hostname/session
+        var result1 = await RemoteDebugTools.RemoteDebugCommand("vm2/DumpSession", "vertarget");
+        Assert.Contains("error", JsonSerializer.Serialize(result1)); // Fails to connect, not parse
         
-        var json = JsonSerializer.Serialize(result);
-        
-        Assert.DoesNotContain("MySecretPass123", json);
-        Assert.Contains("password=***", json);
+        // Format: server=hostname,session=name
+        var result2 = await RemoteDebugTools.RemoteDebugCommand("server=vm2,session=DumpSession", "vertarget");
+        Assert.Contains("error", JsonSerializer.Serialize(result2));
     }
 }
