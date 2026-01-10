@@ -18,7 +18,14 @@ Atlas is an MCP (Model Context Protocol) server that exposes Windows system diag
 - **Crash Diagnosis** - Auto-detect crash causes, exception chains, and stack traces
 - **Deadlock Detection** - Find threads waiting on locks, identify potential deadlocks
 - **Network Connections** - List TCP connections and listeners with owning process info
+- **Kernel Diagnostics** - Enumerate loaded kernel drivers with version and signature info
 - **Remote Machine Support** - Query processes on remote Windows machines via WMI
+
+## Documentation
+
+- [User-Space Investigation Guide](docs/user-space-guide.md) - Memory leaks, crashes, deadlocks, process analysis
+- [Kernel-Space Investigation Guide](docs/kernel-space-guide.md) - Driver analysis, BSODs, security auditing
+- [Network Investigation Guide](docs/network-guide.md) - Connections, ports, network troubleshooting
 
 ## Prerequisites
 
@@ -149,6 +156,13 @@ All process tools support an optional `hostname` parameter to query remote Windo
 |------|-------------|
 | `get_system_info` | OS version, processor count, memory, uptime, .NET version |
 
+### Kernel Tools
+
+| Tool | Description |
+|------|-------------|
+| `list_drivers` | List loaded kernel drivers with name, path, size, base address |
+| `get_driver_info` | Detailed driver info including version and digital signature status |
+
 ## Usage Examples
 
 ### Investigating High Memory Usage
@@ -223,7 +237,9 @@ The `hostname` parameter for process tools:
 
 ## Roadmap
 
-- **Kernel dump analysis** - Currently only .NET user-mode dumps are supported
+- **Kernel pool analysis** - Memory pool usage and pool tag tracking
+- **Handle/object analysis** - Detect handle leaks and enumerate kernel objects
+- **Kernel dump analysis** - Full kernel dump support (currently only .NET user-mode dumps for heap analysis)
 - **Linux support** - Process and dump analysis for Linux systems
 - **Performance counters** - Real-time CPU, memory, disk metrics
 - **ETW tracing** - Event Tracing for Windows integration
