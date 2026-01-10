@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Remote Debug Tools**: Analyze crash dumps on remote VMs via remote.exe
+  - `remote_analyze_crash` - Crash analysis on remote session
+  - `remote_heap_stats` - Heap statistics from remote dump
+  - `remote_stack_trace` - Managed/native stack traces
+  - `remote_list_modules` - List loaded modules
+  - `remote_debug_command` - Run arbitrary WinDbg commands
+  - Connection via `remote.exe` for persistent, multi-client sessions
+  - See [Remote Debugging Guide](docs/remote-debugging-guide.md)
+
 ## [0.1.0] - 2026-01-03
 
 ### Added

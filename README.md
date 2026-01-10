@@ -176,13 +176,19 @@ All process tools support an optional `hostname` parameter to query remote Windo
 
 | Tool | Description |
 |------|-------------|
-| `remote_analyze_crash` | Analyze crash dump on remote WinDbg debug server |
+| `remote_analyze_crash` | Analyze crash dump on remote debug session |
 | `remote_heap_stats` | Get heap statistics from remote dump |
 | `remote_stack_trace` | Get managed or native stack trace from remote dump |
 | `remote_list_modules` | List loaded modules from remote dump |
-| `remote_debug_command` | Execute arbitrary WinDbg command on remote server |
+| `remote_debug_command` | Execute arbitrary WinDbg command on remote session |
 
-Remote debug tools connect to a [dbgsrv](https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/dbgsrv-command-line-options) instance running on a debug VM. This allows analyzing crash dumps without copying large files locally. See [Remote Debugging Guide](docs/remote-debugging-guide.md) for setup.
+Remote debug tools connect to a [remote.exe](https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/the-remote-exe-utility) session running on a debug VM. Start a session on the VM with:
+
+```cmd
+remote.exe /s "cdb -z C:\dumps\crash.dmp" DumpSession
+```
+
+Then connect from Atlas using the connection string `hostname/session` (e.g., `vm2/DumpSession`). This allows analyzing multi-GB crash dumps without copying files locally. See [Remote Debugging Guide](docs/remote-debugging-guide.md) for full setup.
 
 ## Usage Examples
 
