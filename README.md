@@ -26,6 +26,7 @@ Atlas is an MCP (Model Context Protocol) server that exposes Windows system diag
 - [User-Space Investigation Guide](docs/user-space-guide.md) - Memory leaks, crashes, deadlocks, process analysis
 - [Kernel-Space Investigation Guide](docs/kernel-space-guide.md) - Driver analysis, BSODs, security auditing
 - [Network Investigation Guide](docs/network-guide.md) - Connections, ports, network troubleshooting
+- [Remote Debugging Guide](docs/remote-debugging-guide.md) - Analyze dumps on remote VMs via WinDbg protocol
 
 ## Prerequisites
 
@@ -170,6 +171,18 @@ All process tools support an optional `hostname` parameter to query remote Windo
 | `get_interrupt_stats` | Processor interrupt information |
 | `get_physical_memory` | Physical memory layout and usage |
 | `get_system_resources` | Comprehensive system resource summary |
+
+### Remote Debug Tools
+
+| Tool | Description |
+|------|-------------|
+| `remote_analyze_crash` | Analyze crash dump on remote WinDbg debug server |
+| `remote_heap_stats` | Get heap statistics from remote dump |
+| `remote_stack_trace` | Get managed or native stack trace from remote dump |
+| `remote_list_modules` | List loaded modules from remote dump |
+| `remote_debug_command` | Execute arbitrary WinDbg command on remote server |
+
+Remote debug tools connect to a [dbgsrv](https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/dbgsrv-command-line-options) instance running on a debug VM. This allows analyzing crash dumps without copying large files locally. See [Remote Debugging Guide](docs/remote-debugging-guide.md) for setup.
 
 ## Usage Examples
 
