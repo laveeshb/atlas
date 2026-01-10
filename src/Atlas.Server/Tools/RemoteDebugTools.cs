@@ -6,39 +6,31 @@ using Atlas.Server.Debugging.Parsers;
 namespace Atlas.Server.Tools;
 
 /// <summary>
-/// MCP tools for remote dump analysis via WinDbg debug server (dbgsrv).
+/// MCP tools for remote dump analysis via WinDbg debug server.
+/// The server must be started with the dump already loaded:
+///   cdb -server tcp:port=5005 -z C:\dumps\app.dmp
 /// </summary>
 [McpServerToolType]
 public static class RemoteDebugTools
 {
     [McpServerTool(Name = "remote_analyze_crash")]
-    [Description("Analyze a crash dump on a remote WinDbg debug server. Returns structured crash analysis including exception info, faulting module, and stack trace.")]
+    [Description("Analyze a crash dump on a remote WinDbg debug server. The dump must already be loaded on the server (started with 'cdb -server tcp:port=5005 -z dump.dmp'). Returns structured crash analysis including exception info, faulting module, and stack trace.")]
     public static async Task<object> RemoteAnalyzeCrash(
         [Description("WinDbg connection string (e.g., 'tcp:server=vm2,port=5005' or 'ssl:server=vm2,port=5005')")] 
         string connectionString,
-        [Description("Full path to the dump file on the remote machine (e.g., 'C:\\dumps\\app.dmp')")] 
-        string dumpPath,
-        [Description("Debug server password (if required and not in connection string)")] 
+        [Description("Debug server password (if required)")] 
         string? password = null)
     {
         try
         {
             await using var session = await DebugSession.ConnectAsync(connectionString, password);
             
-            var openResult = await session.OpenDumpAsync(dumpPath);
-            if (openResult.Contains("error", StringComparison.OrdinalIgnoreCase) || 
-                openResult.Contains("cannot", StringComparison.OrdinalIgnoreCase))
-            {
-                return new { error = "Failed to open dump", details = openResult, dumpPath };
-            }
-
             var analyzeOutput = await session.AnalyzeCrashAsync();
             var result = AnalyzeParser.Parse(analyzeOutput);
 
             return new
             {
                 status = "success",
-                dumpPath,
                 connectionString = SanitizeConnectionString(connectionString),
                 crashType = result.CrashType,
                 exceptionCode = result.ExceptionCode,
@@ -66,7 +58,7 @@ public static class RemoteDebugTools
             return new 
             { 
                 error = "Remote analysis failed", 
-                message = ex.Message,
+                message = SanitizePassword(ex.Message),
                 connectionString = SanitizeConnectionString(connectionString),
                 suggestion = GetSuggestion(ex)
             };
@@ -74,12 +66,10 @@ public static class RemoteDebugTools
     }
 
     [McpServerTool(Name = "remote_heap_stats")]
-    [Description("Get heap statistics from a dump on a remote debug server. Shows object counts and sizes by type.")]
+    [Description("Get heap statistics from a dump on a remote debug server. The dump must already be loaded on the server. Shows object counts and sizes by type.")]
     public static async Task<object> RemoteHeapStats(
         [Description("WinDbg connection string (e.g., 'tcp:server=vm2,port=5005')")] 
         string connectionString,
-        [Description("Full path to the dump file on the remote machine")] 
-        string dumpPath,
         [Description("Debug server password (if required)")] 
         string? password = null,
         [Description("Number of top types to return (default: 50)")] 
@@ -88,12 +78,6 @@ public static class RemoteDebugTools
         try
         {
             await using var session = await DebugSession.ConnectAsync(connectionString, password);
-            
-            var openResult = await session.OpenDumpAsync(dumpPath);
-            if (openResult.Contains("error", StringComparison.OrdinalIgnoreCase))
-            {
-                return new { error = "Failed to open dump", details = openResult };
-            }
 
             var heapOutput = await session.DumpHeapStatsAsync();
             var result = HeapStatsParser.Parse(heapOutput);
@@ -101,7 +85,6 @@ public static class RemoteDebugTools
             return new
             {
                 status = "success",
-                dumpPath,
                 totalObjects = result.TotalObjects,
                 totalBytes = result.TotalBytes,
                 totalMB = Math.Round(result.TotalBytes / 1024.0 / 1024.0, 2),
@@ -120,19 +103,17 @@ public static class RemoteDebugTools
             return new 
             { 
                 error = "Remote heap analysis failed", 
-                message = ex.Message,
+                message = SanitizePassword(ex.Message),
                 suggestion = GetSuggestion(ex)
             };
         }
     }
 
     [McpServerTool(Name = "remote_stack_trace")]
-    [Description("Get stack trace from a dump on a remote debug server. Supports both managed (.NET) and native stacks.")]
+    [Description("Get stack trace from a dump on a remote debug server. The dump must already be loaded on the server. Supports both managed (.NET) and native stacks.")]
     public static async Task<object> RemoteStackTrace(
         [Description("WinDbg connection string (e.g., 'tcp:server=vm2,port=5005')")] 
         string connectionString,
-        [Description("Full path to the dump file on the remote machine")] 
-        string dumpPath,
         [Description("Stack type: 'managed' for .NET (!clrstack) or 'native' for native (k). Default: managed")] 
         string stackType = "managed",
         [Description("Debug server password (if required)")] 
@@ -142,12 +123,6 @@ public static class RemoteDebugTools
         {
             await using var session = await DebugSession.ConnectAsync(connectionString, password);
             
-            var openResult = await session.OpenDumpAsync(dumpPath);
-            if (openResult.Contains("error", StringComparison.OrdinalIgnoreCase))
-            {
-                return new { error = "Failed to open dump", details = openResult };
-            }
-
             string stackOutput;
             StackTraceResult result;
 
@@ -165,7 +140,6 @@ public static class RemoteDebugTools
             return new
             {
                 status = "success",
-                dumpPath,
                 stackType = result.StackType,
                 threadId = result.ThreadId,
                 frameCount = result.Frames.Count,
@@ -185,19 +159,17 @@ public static class RemoteDebugTools
             return new 
             { 
                 error = "Remote stack trace failed", 
-                message = ex.Message,
+                message = SanitizePassword(ex.Message),
                 suggestion = GetSuggestion(ex)
             };
         }
     }
 
     [McpServerTool(Name = "remote_list_modules")]
-    [Description("List loaded modules from a dump on a remote debug server.")]
+    [Description("List loaded modules from a dump on a remote debug server. The dump must already be loaded on the server.")]
     public static async Task<object> RemoteListModules(
         [Description("WinDbg connection string (e.g., 'tcp:server=vm2,port=5005')")] 
         string connectionString,
-        [Description("Full path to the dump file on the remote machine")] 
-        string dumpPath,
         [Description("Debug server password (if required)")] 
         string? password = null)
     {
@@ -205,19 +177,12 @@ public static class RemoteDebugTools
         {
             await using var session = await DebugSession.ConnectAsync(connectionString, password);
             
-            var openResult = await session.OpenDumpAsync(dumpPath);
-            if (openResult.Contains("error", StringComparison.OrdinalIgnoreCase))
-            {
-                return new { error = "Failed to open dump", details = openResult };
-            }
-
             var modulesOutput = await session.ListModulesAsync();
             var result = ModuleParser.Parse(modulesOutput);
 
             return new
             {
                 status = "success",
-                dumpPath,
                 moduleCount = result.Modules.Count,
                 modules = result.Modules.Select(m => new
                 {
@@ -234,19 +199,17 @@ public static class RemoteDebugTools
             return new 
             { 
                 error = "Remote module list failed", 
-                message = ex.Message,
+                message = SanitizePassword(ex.Message),
                 suggestion = GetSuggestion(ex)
             };
         }
     }
 
     [McpServerTool(Name = "remote_debug_command")]
-    [Description("Execute an arbitrary WinDbg command on a remote debug server. For advanced users.")]
+    [Description("Execute an arbitrary WinDbg command on a remote debug server. The dump must already be loaded on the server. For advanced users.")]
     public static async Task<object> RemoteDebugCommand(
         [Description("WinDbg connection string (e.g., 'tcp:server=vm2,port=5005')")] 
         string connectionString,
-        [Description("Full path to the dump file on the remote machine")] 
-        string dumpPath,
         [Description("WinDbg command to execute (e.g., '!pe', '!threads', 'vertarget')")] 
         string command,
         [Description("Debug server password (if required)")] 
@@ -256,18 +219,11 @@ public static class RemoteDebugTools
         {
             await using var session = await DebugSession.ConnectAsync(connectionString, password);
             
-            var openResult = await session.OpenDumpAsync(dumpPath);
-            if (openResult.Contains("error", StringComparison.OrdinalIgnoreCase))
-            {
-                return new { error = "Failed to open dump", details = openResult };
-            }
-
             var output = await session.ExecuteCommandAsync(command);
 
             return new
             {
                 status = "success",
-                dumpPath,
                 command,
                 output = TruncateOutput(output, 10000)
             };
@@ -277,7 +233,7 @@ public static class RemoteDebugTools
             return new 
             { 
                 error = "Remote command failed", 
-                message = ex.Message,
+                message = SanitizePassword(ex.Message),
                 command,
                 suggestion = GetSuggestion(ex)
             };
@@ -287,9 +243,15 @@ public static class RemoteDebugTools
     private static string SanitizeConnectionString(string connectionString)
     {
         // Remove password from connection string for logging
+        return SanitizePassword(connectionString);
+    }
+
+    private static string SanitizePassword(string text)
+    {
+        // Remove password values from any text (connection strings, error messages, etc.)
         return System.Text.RegularExpressions.Regex.Replace(
-            connectionString, 
-            @"password=[^,\s]+", 
+            text, 
+            @"password=[^,\s\'\""]+", 
             "password=***",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     }
@@ -304,7 +266,7 @@ public static class RemoteDebugTools
         if (ex.Message.Contains("connect", StringComparison.OrdinalIgnoreCase) || 
             ex.Message.Contains("remote", StringComparison.OrdinalIgnoreCase))
         {
-            return "Could not connect to debug server. Verify: (1) dbgsrv is running on the target, (2) connection string is correct, (3) firewall allows the port, (4) password is correct.";
+            return "Could not connect to debug server. Verify: (1) cdb -server is running on the target with -z dump.dmp, (2) connection string is correct, (3) firewall allows the port, (4) password is correct if used.";
         }
 
         if (ex is TimeoutException)

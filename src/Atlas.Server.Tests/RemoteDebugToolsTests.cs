@@ -4,7 +4,7 @@ using System.Text.Json;
 namespace Atlas.Server.Tests;
 
 /// <summary>
-/// Tests for RemoteDebugTools that don't require actual cdb.exe/dbgsrv.
+/// Tests for RemoteDebugTools that don't require actual cdb.exe.
 /// These test error handling and input validation.
 /// </summary>
 public class RemoteDebugToolsTests
@@ -14,8 +14,7 @@ public class RemoteDebugToolsTests
     {
         // This will fail to connect (no server running), but should handle gracefully
         var result = await RemoteDebugTools.RemoteAnalyzeCrash(
-            connectionString: "tcp:server=nonexistent.invalid,port=99999",
-            dumpPath: @"C:\fake\path.dmp");
+            connectionString: "tcp:server=nonexistent.invalid,port=99999");
 
         var json = JsonSerializer.Serialize(result);
         var doc = JsonDocument.Parse(json);
@@ -29,8 +28,7 @@ public class RemoteDebugToolsTests
     public async Task RemoteHeapStats_WithInvalidConnectionString_ReturnsError()
     {
         var result = await RemoteDebugTools.RemoteHeapStats(
-            connectionString: "tcp:server=nonexistent.invalid,port=99999",
-            dumpPath: @"C:\fake\path.dmp");
+            connectionString: "tcp:server=nonexistent.invalid,port=99999");
 
         var json = JsonSerializer.Serialize(result);
         var doc = JsonDocument.Parse(json);
@@ -43,7 +41,6 @@ public class RemoteDebugToolsTests
     {
         var result = await RemoteDebugTools.RemoteStackTrace(
             connectionString: "tcp:server=nonexistent.invalid,port=99999",
-            dumpPath: @"C:\fake\path.dmp",
             stackType: "managed");
 
         var json = JsonSerializer.Serialize(result);
@@ -54,8 +51,7 @@ public class RemoteDebugToolsTests
     public async Task RemoteListModules_WithInvalidConnectionString_ReturnsError()
     {
         var result = await RemoteDebugTools.RemoteListModules(
-            connectionString: "tcp:server=nonexistent.invalid,port=99999",
-            dumpPath: @"C:\fake\path.dmp");
+            connectionString: "tcp:server=nonexistent.invalid,port=99999");
 
         var json = JsonSerializer.Serialize(result);
         Assert.Contains("error", json);
@@ -66,7 +62,6 @@ public class RemoteDebugToolsTests
     {
         var result = await RemoteDebugTools.RemoteDebugCommand(
             connectionString: "tcp:server=nonexistent.invalid,port=99999",
-            dumpPath: @"C:\fake\path.dmp",
             command: "vertarget");
 
         var json = JsonSerializer.Serialize(result);
@@ -77,8 +72,7 @@ public class RemoteDebugToolsTests
     public async Task RemoteAnalyzeCrash_PasswordIsSanitizedInResponse()
     {
         var result = await RemoteDebugTools.RemoteAnalyzeCrash(
-            connectionString: "tcp:server=test,port=5005,password=supersecret",
-            dumpPath: @"C:\fake\path.dmp");
+            connectionString: "tcp:server=test,port=5005,password=supersecret");
 
         var json = JsonSerializer.Serialize(result);
         
@@ -91,8 +85,7 @@ public class RemoteDebugToolsTests
     {
         // Test via the error response which includes sanitized connection string
         var result = await RemoteDebugTools.RemoteAnalyzeCrash(
-            connectionString: "ssl:server=myvm,port=5005,password=MySecretPass123",
-            dumpPath: @"C:\test.dmp");
+            connectionString: "ssl:server=myvm,port=5005,password=MySecretPass123");
         
         var json = JsonSerializer.Serialize(result);
         

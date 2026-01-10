@@ -30,9 +30,9 @@ When crash dumps are on a secured cloud VM that you can't copy files from, Atlas
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                        Debug VM (VM2)                                    │
 │  ┌─────────────────┐    ┌────────────────────────────────────────────┐  │
-│  │ C:\dumps\       │    │  dbgsrv.exe -t tcp:port=5005               │  │
+│  │ C:\dumps\       │    │  cdb -server tcp:port=5005 -z dump.dmp     │  │
 │  │ app.dmp         │◀───│  (part of Debugging Tools for Windows)     │  │
-│  │ crash.dmp       │    │  Listens for WinDbg protocol connections   │  │
+│  │ crash.dmp       │    │  Loads dump and listens for connections    │  │
 │  └─────────────────┘    └─────────────────────────────────────────────┘ │
 │                                      ▲                                   │
 └──────────────────────────────────────┼───────────────────────────────────┘
@@ -43,7 +43,7 @@ When crash dumps are on a secured cloud VM that you can't copy files from, Atlas
 │  ┌───────────────────────────────────┴──────────────────────────────────┐│
 │  │  Atlas.Server                                                        ││
 │  │  - Spawns local cdb.exe with -remote connection string               ││
-│  │  - Sends WinDbg commands: .opendump, !analyze, !dumpheap             ││
+│  │  - Sends WinDbg commands: !analyze, !dumpheap, lm, k                 ││
 │  │  - Parses text output into structured JSON                           ││
 │  └───────────────────────────────────────────────────────────────────────┘│
 │                              ▲                                            │
@@ -55,6 +55,9 @@ When crash dumps are on a secured cloud VM that you can't copy files from, Atlas
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
+> **Note:** The dump is loaded on the server side using `cdb -server`. The client
+> connects and sends commands directly - no need to open the dump from the client.
+
 ---
 
 ## Setup
@@ -62,7 +65,7 @@ When crash dumps are on a secured cloud VM that you can't copy files from, Atlas
 ### Prerequisites
 
 **On Debug VM (VM2):**
-- Windows SDK / Debugging Tools for Windows (includes dbgsrv.exe)
+- Windows SDK / Debugging Tools for Windows (includes cdb.exe)
 - Firewall rule allowing inbound TCP on debug port
 - Dump files accessible locally
 
@@ -74,25 +77,25 @@ When crash dumps are on a secured cloud VM that you can't copy files from, Atlas
 
 ### Step 1: Start Debug Server on VM2
 
+The server must load the dump file and expose it for remote debugging:
+
 Basic (no authentication):
 ```cmd
-dbgsrv -t tcp:port=5005
+cdb -server tcp:port=5005 -z C:\dumps\app.dmp
 ```
 
 With password:
 ```cmd
-dbgsrv -t tcp:port=5005,password=YourSecretPassword
+cdb -server tcp:port=5005,password=YourSecretPassword -z C:\dumps\app.dmp
 ```
 
 With SSL encryption:
 ```cmd
-dbgsrv -t ssl:port=5005,password=YourSecretPassword
+cdb -server ssl:port=5005,password=YourSecretPassword -z C:\dumps\app.dmp
 ```
 
-With IP allowlist:
-```cmd
-dbgsrv -t tcp:port=5005,password=YourSecretPassword -ipportaccess 10.0.0.100
-```
+> **Important:** The dump file path is specified on the server side with `-z`.
+> The client doesn't need to know the path - the dump is already loaded.
 
 ### Step 2: Configure Firewall on VM2
 
@@ -109,7 +112,7 @@ New-NetFirewallRule -DisplayName "WinDbg Remote Debug" `
 cdb -remote tcp:server=vm2.corp.net,port=5005,password=YourSecretPassword
 ```
 
-If you get a debugger prompt, connection is working. Type `q` to quit.
+If you get a debugger prompt with dump info, connection is working. Type `q` to disconnect, `qq` to shut down the server.
 
 ---
 
