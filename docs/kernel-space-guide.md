@@ -9,6 +9,11 @@ This guide covers investigating kernel-level issues: driver problems, BSODs, sys
 - [BSOD Investigation](#bsod-investigation)
 - [Security Auditing](#security-auditing)
 - [Tips and Best Practices](#tips-and-best-practices)
+- [Pool Memory Analysis](#pool-memory-analysis)
+- [Handle Leak Detection](#handle-leak-detection)
+- [Thread Analysis](#thread-analysis)
+- [System Resources](#system-resources)
+- [Coming Soon](#coming-soon)
 
 ---
 
@@ -242,13 +247,166 @@ Compare periodically to detect changes.
 
 ---
 
+## Pool Memory Analysis
+
+### Analyzing Kernel Pool Usage
+
+```
+"Show kernel pool memory usage"
+```
+
+Atlas uses `analyze_pool_usage` to show paged and non-paged pool statistics:
+
+```json
+{
+  "kernel": {
+    "totalBytes": 523190272,
+    "pagedBytes": 412876800,
+    "nonPagedBytes": 110313472
+  },
+  "system": {
+    "handleCount": 125000,
+    "processCount": 234,
+    "threadCount": 3456
+  }
+}
+```
+
+### Finding Memory Leaks by Pool Tag
+
+```
+"List top pool tags by memory usage"
+```
+
+Atlas uses `list_pool_tags` to identify kernel memory consumers:
+
+| Tag | Paged | Non-Paged | Total |
+|-----|-------|-----------|-------|
+| CM31 | 125 MB | 0 B | 125 MB |
+| MmSt | 45 MB | 12 MB | 57 MB |
+| Ntfs | 38 MB | 2 MB | 40 MB |
+
+**Common pool tags:**
+- `CM31` - Registry cache
+- `MmSt` - Memory manager section tables
+- `Ntfs` - NTFS file system
+- `Pool` - General pool allocations
+- `Thre` - Thread objects
+
+---
+
+## Handle Leak Detection
+
+### Finding Processes with Handle Leaks
+
+```
+"Find processes with high handle counts"
+```
+
+Atlas uses `find_handle_leaks` to identify potential leaks:
+
+```json
+{
+  "processes": [
+    { "pid": 1234, "name": "LeakyApp", "handleCount": 15000, "severity": "critical" },
+    { "pid": 5678, "name": "AnotherApp", "handleCount": 3500, "severity": "medium" }
+  ]
+}
+```
+
+**Severity levels:**
+- **critical**: 10,000+ handles
+- **high**: 5,000+ handles
+- **medium**: 2,000+ handles
+- **low**: 1,000+ handles
+
+### System Handle Statistics
+
+```
+"Show system handle statistics"
+```
+
+Atlas uses `list_handle_types` to show system-wide handle counts.
+
+---
+
+## Thread Analysis
+
+### Analyzing Process Threads
+
+```
+"Analyze threads for process 1234"
+```
+
+Atlas uses `analyze_thread_stats` to show thread CPU time breakdown:
+
+```json
+{
+  "threadCount": 45,
+  "summary": {
+    "totalUserTimeMs": 125000,
+    "totalKernelTimeMs": 45000,
+    "kernelTimePercent": 26.5
+  },
+  "threads": [
+    { "id": 1234, "state": "Running", "kernelTime": 5000, "userTime": 12000 }
+  ]
+}
+```
+
+**What to look for:**
+- High kernel time percentage may indicate I/O-heavy operations
+- Threads in "Wait" state with unusual wait reasons
+- Threads consuming disproportionate CPU time
+
+---
+
+## System Resources
+
+### Physical Memory Analysis
+
+```
+"Show physical memory usage"
+```
+
+Atlas uses `get_physical_memory` to show detailed memory statistics:
+
+```json
+{
+  "memoryLoad": 65,
+  "physical": {
+    "totalBytes": 34359738368,
+    "availableBytes": 12073353216,
+    "usedPercent": 64.8
+  },
+  "kernel": {
+    "pagedBytes": 412876800,
+    "nonPagedBytes": 110313472
+  }
+}
+```
+
+### Comprehensive System Overview
+
+```
+"Show system resource summary"
+```
+
+Atlas uses `get_system_resources` for a complete overview:
+
+```json
+{
+  "system": { "machineName": "SERVER01", "processorCount": 8, "uptime": "5.12:34:56" },
+  "counts": { "processes": 234, "threads": 3456, "handles": 125000 },
+  "memory": { "loadPercent": 65, "physicalUsedBytes": 22286385152 },
+  "kernelMemory": { "pagedBytes": 412876800, "nonPagedBytes": 110313472 }
+}
+```
+
+---
+
 ## Coming Soon
 
-The following kernel investigation capabilities are planned:
-
-- **Pool memory analysis** - Track kernel memory usage by pool tag
-- **Handle leak detection** - Find processes leaking kernel handles
-- **Kernel thread analysis** - Inspect kernel stacks and DPC latency
-- **Kernel dump analysis** - Full analysis of MEMORY.DMP files
+- **Kernel dump analysis** - Full analysis of MEMORY.DMP files, including stack traces, crash analysis, and kernel state reconstruction
 
 See [GitHub Issues](https://github.com/laveeshb/atlas/issues?q=label%3A%22area%3A+kernel%22) for progress.

@@ -18,7 +18,7 @@ Atlas is an MCP (Model Context Protocol) server that exposes Windows system diag
 - **Crash Diagnosis** - Auto-detect crash causes, exception chains, and stack traces
 - **Deadlock Detection** - Find threads waiting on locks, identify potential deadlocks
 - **Network Connections** - List TCP connections and listeners with owning process info
-- **Kernel Diagnostics** - Enumerate loaded kernel drivers with version and signature info
+- **Kernel Diagnostics** - Driver enumeration, pool memory analysis, handle leak detection, thread analysis
 - **Remote Machine Support** - Query processes on remote Windows machines via WMI
 
 ## Documentation
@@ -162,6 +162,14 @@ All process tools support an optional `hostname` parameter to query remote Windo
 |------|-------------|
 | `list_drivers` | List loaded kernel drivers with name, path, size, base address |
 | `get_driver_info` | Detailed driver info including version and digital signature status |
+| `analyze_pool_usage` | Kernel pool memory statistics (paged/non-paged) |
+| `list_pool_tags` | Pool allocations by tag - find kernel memory consumers |
+| `find_handle_leaks` | Processes with unusually high handle counts |
+| `list_handle_types` | System-wide handle statistics by type |
+| `analyze_thread_stats` | Thread CPU time breakdown for a process |
+| `get_interrupt_stats` | Processor interrupt information |
+| `get_physical_memory` | Physical memory layout and usage |
+| `get_system_resources` | Comprehensive system resource summary |
 
 ## Usage Examples
 
