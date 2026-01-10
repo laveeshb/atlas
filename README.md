@@ -245,8 +245,6 @@ The `hostname` parameter for process tools:
 
 ## Roadmap
 
-- **Kernel pool analysis** - Memory pool usage and pool tag tracking
-- **Handle/object analysis** - Detect handle leaks and enumerate kernel objects
 - **Kernel dump analysis** - Full kernel dump support (currently only .NET user-mode dumps for heap analysis)
 - **Linux support** - Process and dump analysis for Linux systems
 - **Performance counters** - Real-time CPU, memory, disk metrics
